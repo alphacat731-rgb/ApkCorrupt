@@ -12,7 +12,7 @@
     <ApplicationId>com.alphacat.apkcorrupt</ApplicationId>
     <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
-    <SupportedOSPlatformVersion>24.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion>29.0</SupportedOSPlatformVersion>
     <TargetSdkVersion>36</TargetSdkVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
   </PropertyGroup>

@@ -11,36 +11,29 @@ public static class ApkExport
         CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsAndroidVersionAtLeast(29))
-        {
-            var legacyDir = Environment.GetExternalStoragePublicDirectory(
-                Environment.DirectoryDownloads)!;
-
-            Directory.CreateDirectory(legacyDir.AbsolutePath);
-            var legacyPath = Path.Combine(legacyDir.AbsolutePath, displayName);
-
-            await using var input = File.OpenRead(sourcePath);
-            await using var output = File.Create(legacyPath);
-            await input.CopyToAsync(output, cancellationToken);
-
-            return legacyPath;
-        }
+            throw new PlatformNotSupportedException(
+                "APK Corrupt now targets Android 10+ for modern scoped-storage APK export.");
 
         var resolver = Android.App.Application.Context.ContentResolver
             ?? throw new InvalidOperationException("No ContentResolver available.");
 
         var values = new ContentValues();
-        values.Put(MediaStore.MediaColumns.DisplayName, displayName);
-        values.Put(MediaStore.MediaColumns.MimeType, "application/vnd.android.package-archive");
-        values.Put(MediaStore.MediaColumns.RelativePath, Environment.DirectoryDownloads);
+        values.Put("display_name", displayName);
+        values.Put("mime_type", "application/vnd.android.package-archive");
+        values.Put("relative_path", "Download/");
 
-        var uri = resolver.Insert(MediaStore.Downloads.ExternalContentUri, values)
-            ?? throw new InvalidOperationException("Could not create Downloads entry.");
+        var uri = resolver.Insert(
+            MediaStore.Downloads.ExternalContentUri,
+            values);
+
+        if (uri is null)
+            throw new InvalidOperationException("Could not create the Downloads entry.");
 
         try
         {
             await using var input = File.OpenRead(sourcePath);
             await using var output = resolver.OpenOutputStream(uri)
-                ?? throw new InvalidOperationException("Could not open Downloads output.");
+                ?? throw new InvalidOperationException("Could not open the Downloads output.");
 
             await input.CopyToAsync(output, cancellationToken);
             return uri.ToString()!;
@@ -57,22 +50,18 @@ public static class ApkExport
         if (!OperatingSystem.IsAndroid())
             return Task.CompletedTask;
 
-        var context = Android.App.Application.Context;
+        var uri = global::Android.Net.Uri.Parse(pathOrUri)
+            ?? throw new InvalidOperationException("Invalid APK URI.");
+
         var intent = new Intent(Intent.ActionView);
-
-        var uri = global::Android.Net.Uri.Parse(pathOrUri);
-        if (uri is null)
-            throw new InvalidOperationException("Invalid APK URI.");
-
         intent.SetDataAndType(
             uri,
             "application/vnd.android.package-archive");
-
         intent.AddFlags(
             ActivityFlags.NewTask |
             ActivityFlags.GrantReadUriPermission);
 
-        context.StartActivity(intent);
+        Android.App.Application.Context.StartActivity(intent);
         return Task.CompletedTask;
     }
 }
