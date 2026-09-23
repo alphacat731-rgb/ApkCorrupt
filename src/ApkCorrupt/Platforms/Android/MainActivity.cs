@@ -84,7 +84,7 @@ public sealed class MainActivity : Activity
         content.AddView(BuildReportCard());
 
         _corrupt = Button("CORRUPT APK");
-        _corrupt.SetTextColor(Color.White);
+        _corrupt.SetTextColor(AndroidColor.White);
         _corrupt.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 16);
         _corrupt.SetBackgroundColor(AndroidColor.ParseColor("#A96BFF"));
         _corrupt.Click += async (_, _) => await CorruptClickedAsync();
@@ -95,7 +95,7 @@ public sealed class MainActivity : Activity
 
         _openLast = Button("OPEN LAST APK");
         _openLast.Visibility = ViewStates.Gone;
-        _openLast.SetTextColor(Color.White);
+        _openLast.SetTextColor(AndroidColor.White);
         _openLast.SetBackgroundColor(AndroidColor.ParseColor("#34204A"));
         _openLast.Click += (_, _) => OpenLast();
         content.AddView(_openLast, new LinearLayout.LayoutParams(-1, Dp(52))
@@ -131,7 +131,7 @@ public sealed class MainActivity : Activity
         card.AddView(_fileMeta);
 
         var pick = Button("PICK APK");
-        pick.SetTextColor(Color.White);
+        pick.SetTextColor(AndroidColor.White);
         pick.SetBackgroundColor(AndroidColor.ParseColor("#1D1A29"));
         pick.Click += (_, _) => PickApk();
         card.AddView(pick, new LinearLayout.LayoutParams(-1, Dp(48))
@@ -223,7 +223,7 @@ public sealed class MainActivity : Activity
         });
 
         var randomize = Button("RANDOMIZE SEED");
-        randomize.SetTextColor(Color.White);
+        randomize.SetTextColor(AndroidColor.White);
         randomize.SetBackgroundColor(AndroidColor.ParseColor("#1D1A29"));
         randomize.Click += (_, _) => _seed.Text = Random.Shared.Next(10000000, 99999999).ToString();
         card.AddView(randomize);
