@@ -74,6 +74,9 @@ public static class ApkCorruptor
         var rng = new Random(options.Seed);
         var textureCount = 0;
         var audioCount = 0;
+        var materialCount = 0;
+        var textAssetCount = 0;
+        var meshCount = 0;
         var filesChanged = 0;
         var candidateIndex = 0;
 
@@ -138,6 +141,9 @@ public static class ApkCorruptor
 
                                 textureCount += mutation.TexturesChanged;
                                 audioCount += mutation.AudioChanged;
+                                materialCount += mutation.MaterialsChanged;
+                                textAssetCount += mutation.TextAssetsChanged;
+                                meshCount += mutation.MeshesChanged;
                                 filesChanged++;
                             }
                         }
@@ -184,7 +190,10 @@ public static class ApkCorruptor
                         $"Processing {entry.FullName}",
                         textureCount,
                         audioCount,
-                        filesChanged));
+                        filesChanged,
+                        materialCount,
+                        textAssetCount,
+                        meshCount));
                 }
             }
 
@@ -210,7 +219,10 @@ public static class ApkCorruptor
                 finalPath,
                 textureCount,
                 audioCount,
-                filesChanged);
+                filesChanged,
+                materialCount,
+                textAssetCount,
+                meshCount);
         }
         finally
         {
