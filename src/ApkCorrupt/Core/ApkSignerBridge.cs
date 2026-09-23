@@ -82,9 +82,10 @@ public static class ApkSignerBridge
 
             return Task.CompletedTask;
         }
-        finally
-        {
-            JNIEnv.DeleteLocalRef(clazz);
-        }
+        // Do not call JNIEnv.DeleteLocalRef(clazz) here.
+        // On this Android/.NET runtime the class handle returned by FindClass
+        // is managed as a global reference. Deleting it as a local reference
+        // triggers ART's fatal "Attempt to delete global reference as local
+        // JNI reference" abort, which matches the device crash log.
     }
 }
