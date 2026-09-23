@@ -57,9 +57,7 @@ public static class ApkSignerBridge
         if (clazz == IntPtr.Zero)
             throw new InvalidOperationException("ApkSignerBridge Java class was not found.");
 
-        try
-        {
-            var method = JNIEnv.GetStaticMethodID(
+        var method = JNIEnv.GetStaticMethodID(
                 clazz,
                 "alignAndSign",
                 "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
@@ -80,12 +78,11 @@ public static class ApkSignerBridge
             if (!ok)
                 throw new InvalidOperationException("APK signing bridge returned false.");
 
-            return Task.CompletedTask;
-        }
         // Do not call JNIEnv.DeleteLocalRef(clazz) here.
         // On this Android/.NET runtime the class handle returned by FindClass
         // is managed as a global reference. Deleting it as a local reference
         // triggers ART's fatal "Attempt to delete global reference as local
         // JNI reference" abort, which matches the device crash log.
+        return Task.CompletedTask;
     }
 }
