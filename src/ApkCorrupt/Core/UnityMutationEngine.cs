@@ -12,7 +12,10 @@ public static class UnityMutationEngine
         bool Changed,
         string OutputPath,
         int TexturesChanged,
-        int AudioChanged);
+        int AudioChanged,
+        int MaterialsChanged,
+        int TextAssetsChanged,
+        int MeshesChanged);
 
     public static async Task<MutationResult> TryMutateAsync(
         string inputPath,
@@ -25,7 +28,7 @@ public static class UnityMutationEngine
         if (IsFsb5(inputPath))
         {
             if (!options.Audio)
-                return new MutationResult(false, inputPath, 0, 0);
+                return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
 
             return await MutateFsb5Async(
                 inputPath, outputPath, options, rng, cancellationToken);
@@ -449,6 +452,9 @@ public static class UnityMutationEngine
 
         var textures = 0;
         var audio = 0;
+        var materials = 0;
+        var textAssets = 0;
+        var meshes = 0;
 
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Texture2D))
         {
@@ -473,6 +479,81 @@ public static class UnityMutationEngine
             catch
             {
                 // Unsupported texture: skip it and keep the file usable.
+            }
+        }
+
+        foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Material))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!ShouldHit(options.Intensity, rng))
+                continue;
+
+            try
+            {
+                if (TryMutateMaterial(
+                    manager,
+                    instance,
+                    info,
+                    options.Intensity,
+                    rng))
+                {
+                    materials++;
+                }
+            }
+            catch
+            {
+                // Keep an individual material from aborting the file.
+            }
+        }
+
+        foreach (var info in instance.file.GetAssetsOfType(AssetClassID.TextAsset))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!ShouldHit(options.Intensity, rng))
+                continue;
+
+            try
+            {
+                if (TryMutateTextAsset(
+                    manager,
+                    instance,
+                    info,
+                    options.Intensity,
+                    rng))
+                {
+                    textAssets++;
+                }
+            }
+            catch
+            {
+                // Keep an individual text asset from aborting the file.
+            }
+        }
+
+        foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Mesh))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!ShouldHit(options.Intensity, rng))
+                continue;
+
+            try
+            {
+                if (TryMutateMesh(
+                    manager,
+                    instance,
+                    info,
+                    options.Intensity,
+                    rng))
+                {
+                    meshes++;
+                }
+            }
+            catch
+            {
+                // Keep mesh corruption best-effort.
             }
         }
 
@@ -515,8 +596,8 @@ public static class UnityMutationEngine
             }
         }
 
-        if (textures == 0 && audio == 0)
-            return new MutationResult(false, inputPath, 0, 0);
+        if (textures == 0 && audio == 0 && materials == 0 && textAssets == 0 && meshes == 0)
+            return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
 
         await Task.Run(() =>
         {
@@ -524,7 +605,14 @@ public static class UnityMutationEngine
             instance.file.Write(writer);
         }, cancellationToken);
 
-        return new MutationResult(true, outputPath, textures, audio);
+        return new MutationResult(
+            true,
+            outputPath,
+            textures,
+            audio,
+            materials,
+            textAssets,
+            meshes);
     }
 
     private static async Task<MutationResult> MutateBundleAsync(
@@ -539,8 +627,11 @@ public static class UnityMutationEngine
 
         var textures = 0;
         var audio = 0;
+        var materials = 0;
+        var textAssets = 0;
+        var meshes = 0;
 
-        for (var i = 0; i < bundle.file.BlockAndDirInfo.DirectoryInfos.Count; i++)
+        for (var i = 0; i < bundle.file.BlockAndDirInfo.DirectoryInfos.Count; i++
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -581,6 +672,81 @@ public static class UnityMutationEngine
                 catch
                 {
                     // Unsupported texture/type tree: skip.
+                }
+            }
+
+            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Material))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!ShouldHit(options.Intensity, rng))
+                    continue;
+
+                try
+                {
+                    if (TryMutateMaterial(
+                        manager,
+                        assets,
+                        info,
+                        options.Intensity,
+                        rng))
+                    {
+                        materials++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort material mutation.
+                }
+            }
+
+            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.TextAsset))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!ShouldHit(options.Intensity, rng))
+                    continue;
+
+                try
+                {
+                    if (TryMutateTextAsset(
+                        manager,
+                        assets,
+                        info,
+                        options.Intensity,
+                        rng))
+                    {
+                        textAssets++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort text mutation.
+                }
+            }
+
+            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Mesh))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!ShouldHit(options.Intensity, rng))
+                    continue;
+
+                try
+                {
+                    if (TryMutateMesh(
+                        manager,
+                        assets,
+                        info,
+                        options.Intensity,
+                        rng))
+                    {
+                        meshes++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort mesh mutation.
                 }
             }
 
@@ -634,7 +800,12 @@ public static class UnityMutationEngine
             dirInfo.SetNewData(assets.file);
         }
 
-        var anyBundleChanges = textures > 0 || audio > 0;
+        var anyBundleChanges =
+            textures > 0
+            || audio > 0
+            || materials > 0
+            || textAssets > 0
+            || meshes > 0;
         if (!anyBundleChanges)
             return new MutationResult(false, inputPath, 0, 0);
 
@@ -644,7 +815,14 @@ public static class UnityMutationEngine
             bundle.file.Write(writer);
         }, cancellationToken);
 
-        return new MutationResult(true, outputPath, textures, audio);
+        return new MutationResult(
+            true,
+            outputPath,
+            textures,
+            audio,
+            materials,
+            textAssets,
+            meshes);
     }
 
     private static bool TryMutateTexture(
@@ -911,6 +1089,283 @@ public static class UnityMutationEngine
 
             _ => 0
         };
+    }
+
+    private static bool TryMutateMaterial(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var saved = baseField["m_SavedProperties"];
+
+        if (saved.IsDummy)
+            return false;
+
+        var colors = saved["m_Colors.Array"];
+        var floats = saved["m_Floats.Array"];
+        var texEnvs = saved["m_TexEnvs.Array"];
+
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var changed = false;
+
+        if (!colors.IsDummy)
+        {
+            foreach (var pair in colors.Children)
+            {
+                var nameField = pair["first"];
+                var color = pair["second"];
+
+                if (nameField.IsDummy || color.IsDummy)
+                    continue;
+
+                var propertyName = nameField.AsString ?? string.Empty;
+                var shouldHit = intensity >= 85
+                    || propertyName.Contains("Color", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Tint", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Emission", StringComparison.OrdinalIgnoreCase);
+
+                if (!shouldHit)
+                    continue;
+
+                var r = color["r"];
+                var g = color["g"];
+                var b = color["b"];
+
+                if (r.IsDummy || g.IsDummy || b.IsDummy)
+                    continue;
+
+                // Strongly shift color channels while keeping values finite.
+                if (intensity >= 90)
+                {
+                    r.AsFloat = (float)rng.NextDouble();
+                    g.AsFloat = (float)rng.NextDouble();
+                    b.AsFloat = (float)rng.NextDouble();
+                }
+                else
+                {
+                    r.AsFloat = Math.Clamp(
+                        r.AsFloat + ((float)rng.NextDouble() - 0.5f) * (0.8f * (float)level),
+                        0f,
+                        1f);
+                    g.AsFloat = Math.Clamp(
+                        g.AsFloat + ((float)rng.NextDouble() - 0.5f) * (0.8f * (float)level),
+                        0f,
+                        1f);
+                    b.AsFloat = Math.Clamp(
+                        b.AsFloat + ((float)rng.NextDouble() - 0.5f) * (0.8f * (float)level),
+                        0f,
+                        1f);
+                }
+
+                changed = true;
+            }
+        }
+
+        if (!floats.IsDummy)
+        {
+            foreach (var pair in floats.Children)
+            {
+                var nameField = pair["first"];
+                var valueField = pair["second"];
+
+                if (nameField.IsDummy || valueField.IsDummy)
+                    continue;
+
+                var propertyName = nameField.AsString ?? string.Empty;
+
+                // Avoid render-state fields where arbitrary values could make
+                // a material disappear completely or invalidate the pipeline.
+                if (propertyName.Contains("Blend", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Cull", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Stencil", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("ZWrite", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Queue", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Mode", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (intensity < 80
+                    && !propertyName.Contains("Gloss", StringComparison.OrdinalIgnoreCase)
+                    && !propertyName.Contains("Metal", StringComparison.OrdinalIgnoreCase)
+                    && !propertyName.Contains("Smooth", StringComparison.OrdinalIgnoreCase)
+                    && !propertyName.Contains("Rough", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var current = valueField.AsFloat;
+                if (float.IsNaN(current) || float.IsInfinity(current))
+                    continue;
+
+                var delta = ((float)rng.NextDouble() - 0.5f) * (2.0f * (float)level);
+
+                valueField.AsFloat = intensity >= 90
+                    ? current * (0.15f + ((float)rng.NextDouble() * 2.5f))
+                    : current + delta;
+
+                changed = true;
+            }
+        }
+
+        if (!texEnvs.IsDummy)
+        {
+            foreach (var pair in texEnvs.Children)
+            {
+                if (intensity < 75 && rng.Next(0, 100) >= intensity)
+                    continue;
+
+                var second = pair["second"];
+                var scale = second["m_Scale"];
+                var offset = second["m_Offset"];
+
+                if (!scale.IsDummy)
+                {
+                    var x = scale["x"];
+                    var y = scale["y"];
+
+                    if (!x.IsDummy && !y.IsDummy)
+                    {
+                        var multiplier = intensity >= 90
+                            ? 0.25f + ((float)rng.NextDouble() * 4.5f)
+                            : 0.75f + ((float)rng.NextDouble() * 0.9f);
+
+                        x.AsFloat *= multiplier;
+                        y.AsFloat *= multiplier;
+                        changed = true;
+                    }
+                }
+
+                if (!offset.IsDummy)
+                {
+                    var x = offset["x"];
+                    var y = offset["y"];
+
+                    if (!x.IsDummy && !y.IsDummy)
+                    {
+                        x.AsFloat += ((float)rng.NextDouble() - 0.5f)
+                            * (intensity >= 90 ? 3f : 0.75f);
+                        y.AsFloat += ((float)rng.NextDouble() - 0.5f)
+                            * (intensity >= 90 ? 3f : 0.75f);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (!changed)
+            return false;
+
+        info.SetNewData(baseField);
+        return true;
+    }
+
+    private static bool TryMutateTextAsset(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var script = baseField["m_Script"];
+
+        if (script.IsDummy
+            || script.TemplateField.ValueType != AssetValueType.String)
+            return false;
+
+        var text = script.AsString;
+        if (string.IsNullOrEmpty(text) || text.Length < 8)
+            return false;
+
+        var nameField = baseField["m_Name"];
+        var assetName = nameField.IsDummy ? string.Empty : nameField.AsString ?? string.Empty;
+
+        // Avoid settings/scripts that are unusually likely to be required for
+        // bootstrapping. User-facing configuration/localization/data still gets
+        // corrupted.
+        if (assetName.Contains("manifest", StringComparison.OrdinalIgnoreCase)
+            || assetName.Contains("version", StringComparison.OrdinalIgnoreCase)
+            || assetName.Contains("config", StringComparison.OrdinalIgnoreCase)
+            || assetName.Contains("scripting", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var chars = text.ToCharArray();
+        var touches = (int)Math.Clamp(
+            chars.Length * (0.01 + (0.12 * Math.Clamp(intensity, 1, 100) / 100.0)),
+            2,
+            12000);
+
+        for (var i = 0; i < touches; i++)
+        {
+            var index = rng.Next(chars.Length);
+            var ch = chars[index];
+
+            if (ch == '\\n' || ch == '\\r' || ch == '\\t')
+                continue;
+
+            if (char.IsLetterOrDigit(ch))
+            {
+                const string glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%&*?";
+                chars[index] = glyphs[rng.Next(glyphs.Length)];
+            }
+            else if (!char.IsWhiteSpace(ch))
+            {
+                chars[index] = rng.Next(2) == 0 ? '_' : '~';
+            }
+        }
+
+        var result = new string(chars);
+        if (result == text)
+            return false;
+
+        script.AsString = result;
+        info.SetNewData(baseField);
+        return true;
+    }
+
+    private static bool TryMutateMesh(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var indexBuffer = baseField["m_IndexBuffer"];
+
+        if (indexBuffer.IsDummy
+            || indexBuffer.TemplateField.ValueType != AssetValueType.ByteArray)
+            return false;
+
+        var bytes = indexBuffer.AsByteArray;
+        if (bytes.Length < 8)
+            return false;
+
+        // Only edit index bytes; this keeps mesh metadata/vertex buffer sizes
+        // intact while producing missing, stretched, or mis-triangulated geometry.
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var touches = (int)Math.Clamp(
+            bytes.Length * (0.002 + (0.04 * level)),
+            2,
+            50000);
+
+        for (var i = 0; i < touches; i++)
+        {
+            var index = rng.Next(bytes.Length);
+
+            if (intensity >= 90)
+            {
+                bytes[index] = (byte)rng.Next(0, 256);
+            }
+            else
+            {
+                bytes[index] ^= (byte)rng.Next(1, 32);
+            }
+        }
+
+        indexBuffer.AsByteArray = bytes;
+        info.SetNewData(baseField);
+        return true;
     }
 
     private static bool TryMutateExternalAudio(
