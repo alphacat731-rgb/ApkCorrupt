@@ -21,7 +21,7 @@ public static class ApkExport
         var values = new ContentValues();
         values.Put(MediaStore.MediaColumns.DisplayName, displayName);
         values.Put(MediaStore.MediaColumns.MimeType, "application/vnd.android.package-archive");
-        values.Put(MediaStore.MediaColumns.RelativePath, Environment.DirectoryDownloads + "/");
+        values.Put(MediaStore.MediaColumns.RelativePath, Android.OS.Environment.DirectoryDownloads + "/");
         values.Put(MediaStore.MediaColumns.IsPending, 1);
 
         var collection = MediaStore.Files.GetContentUri(MediaStore.VolumeExternalPrimary);
