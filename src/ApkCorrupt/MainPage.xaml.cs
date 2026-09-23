@@ -108,7 +108,7 @@ public partial class MainPage : ContentPage
 
     private async void OnOpenLastClicked(object? sender, EventArgs e)
     {
-        if (_lastOutputPath is null || !File.Exists(_lastOutputPath))
+        if (_lastOutputPath is null)
             return;
 
         try

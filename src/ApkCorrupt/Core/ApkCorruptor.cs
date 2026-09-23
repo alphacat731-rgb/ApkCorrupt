@@ -42,8 +42,8 @@ public static class ApkCorruptor
             || lower.EndsWith(".sharedassets")
             || lower.EndsWith(".unity3d")
             || lower.EndsWith(".bundle")
-            || lower.EndsWith(".resource")
-            || lower.EndsWith(".ress");
+            || lower.Contains("/streamingassets/")
+            || lower.Contains("/bin/data/");
     }
 
     public static async Task<CorruptionResult> CorruptAsync(
@@ -91,7 +91,9 @@ public static class ApkCorruptor
 
                     if (isUnity)
                     {
-                        var candidate = Path.Combine(workDir, "candidate.bin");
+                        var safeName = string.Concat(Path.GetFileName(entry.FullName).Select(c => char.IsLetterOrDigit(c) || c == '.' || c == '-' || c == '_' ? c : '_'));
+                        if (string.IsNullOrWhiteSpace(safeName)) safeName = "candidate.bin";
+                        var candidate = Path.Combine(workDir, safeName);
                         await using (var src = entry.Open())
                         await using (var dst = File.Create(candidate))
                         {

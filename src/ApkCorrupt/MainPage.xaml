@@ -11,7 +11,7 @@
 
             <Grid ColumnDefinitions="*,Auto">
                 <VerticalStackLayout Spacing="2">
-                    <Label Text="APK CORRUPT" FontSize="28" FontFamily="OpenSansSemibold" />
+                    <Label Text="APK CORRUPT" FontSize="28" />
                     <Label Text="Unity mutation laboratory" FontSize="13" TextColor="{StaticResource Muted}" />
                 </VerticalStackLayout>
                 <Border Grid.Column="1"

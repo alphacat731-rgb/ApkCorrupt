@@ -1,5 +1,4 @@
 using Android.Content;
-using Android.OS;
 using Android.Provider;
 
 namespace ApkCorrupt.Core;
@@ -15,11 +14,14 @@ public static class ApkExport
         {
             var legacyDir = Environment.GetExternalStoragePublicDirectory(
                 Environment.DirectoryDownloads)!;
+
             Directory.CreateDirectory(legacyDir.AbsolutePath);
             var legacyPath = Path.Combine(legacyDir.AbsolutePath, displayName);
+
             await using var input = File.OpenRead(sourcePath);
             await using var output = File.Create(legacyPath);
             await input.CopyToAsync(output, cancellationToken);
+
             return legacyPath;
         }
 
@@ -57,10 +59,19 @@ public static class ApkExport
 
         var context = Android.App.Application.Context;
         var intent = new Intent(Intent.ActionView);
+
+        var uri = global::Android.Net.Uri.Parse(pathOrUri);
+        if (uri is null)
+            throw new InvalidOperationException("Invalid APK URI.");
+
         intent.SetDataAndType(
-            global::Android.Net.Uri.Parse(pathOrUri),
+            uri,
             "application/vnd.android.package-archive");
-        intent.AddFlags(ActivityFlags.NewTask | ActivityFlags.GrantReadUriPermission);
+
+        intent.AddFlags(
+            ActivityFlags.NewTask |
+            ActivityFlags.GrantReadUriPermission);
+
         context.StartActivity(intent);
         return Task.CompletedTask;
     }

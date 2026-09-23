@@ -11,11 +11,9 @@
             <Color x:Key="AccentSoft">#34204A</Color>
             <Color x:Key="Text">#F6F2FF</Color>
             <Color x:Key="Muted">#A8A1B6</Color>
-            <Color x:Key="Danger">#FF667A</Color>
 
             <Style TargetType="Label">
                 <Setter Property="TextColor" Value="{StaticResource Text}" />
-                <Setter Property="FontFamily" Value="OpenSansRegular" />
             </Style>
 
             <Style TargetType="Button">
@@ -23,7 +21,6 @@
                 <Setter Property="BackgroundColor" Value="{StaticResource Panel2}" />
                 <Setter Property="CornerRadius" Value="18" />
                 <Setter Property="Padding" Value="18,14" />
-                <Setter Property="FontFamily" Value="OpenSansSemibold" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>
