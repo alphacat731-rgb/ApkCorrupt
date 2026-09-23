@@ -5,6 +5,9 @@ using Android.OS;
 using Android.Provider;
 using Android.Views;
 using Android.Widget;
+using AndroidView = Android.Views.View;
+using AndroidButton = Android.Widget.Button;
+using AndroidSwitch = Android.Widget.Switch;
 using ApkCorrupt.Core;
 
 namespace ApkCorrupt;
@@ -33,11 +36,11 @@ public sealed class MainActivity : Activity
     private SeekBar _intensity = null!;
     private TextView _intensityValue = null!;
     private EditText _seed = null!;
-    private Switch _textures = null!;
-    private Switch _audio = null!;
-    private Switch _loose = null!;
-    private Button _corrupt = null!;
-    private Button _openLast = null!;
+    private AndroidSwitch _textures = null!;
+    private AndroidSwitch _audio = null!;
+    private AndroidSwitch _loose = null!;
+    private AndroidButton _corrupt = null!;
+    private AndroidButton _openLast = null!;
 
     private string? _sourcePath;
     private string? _lastOutputPath;
@@ -109,7 +112,7 @@ public sealed class MainActivity : Activity
         SetContentView(_root);
     }
 
-    private View BuildSourceCard()
+    private AndroidView BuildSourceCard()
     {
         var card = Card();
         var title = Text("SOURCE APK", 11, "#A8A1B6");
@@ -136,7 +139,7 @@ public sealed class MainActivity : Activity
         return card;
     }
 
-    private View BuildCorruptionCard()
+    private AndroidView BuildCorruptionCard()
     {
         var card = Card();
         card.AddView(Text("CORRUPTION", 11, "#A8A1B6"));
@@ -156,7 +159,7 @@ public sealed class MainActivity : Activity
         _intensity = new SeekBar(this)
         {
             Max = 95,
-            Progress = 50
+            Progress = 30
         };
         _intensity.ProgressChanged += (_, e) =>
         {
@@ -164,6 +167,27 @@ public sealed class MainActivity : Activity
             _intensityValue.Text = $"{value}%";
         };
         card.AddView(_intensity, new LinearLayout.LayoutParams(-1, -2));
+
+        var hint = Text("Higher intensity hits more assets and makes each mutation more aggressive.", 11, "#7F778C");
+        card.AddView(hint, new LinearLayout.LayoutParams(-1, -2)
+        {
+            BottomMargin = Dp(8)
+        });
+
+        var presets = new LinearLayout(this)
+        {
+            Orientation = Orientation.Horizontal
+        };
+
+        AddIntensityPreset(presets, "LIGHT", 10);
+        AddIntensityPreset(presets, "MEDIUM", 35);
+        AddIntensityPreset(presets, "HEAVY", 65);
+        AddIntensityPreset(presets, "CHAOS", 90);
+
+        card.AddView(presets, new LinearLayout.LayoutParams(-1, -2)
+        {
+            BottomMargin = Dp(10)
+        });
 
         _textures = SwitchControl("Texture surgery", true);
         _audio = SwitchControl("Audio mangling", true);
@@ -176,7 +200,7 @@ public sealed class MainActivity : Activity
         return card;
     }
 
-    private View BuildSeedCard()
+    private AndroidView BuildSeedCard()
     {
         var card = Card();
         card.AddView(Text("DETERMINISTIC SEED", 11, "#A8A1B6"));
@@ -206,7 +230,7 @@ public sealed class MainActivity : Activity
         return card;
     }
 
-    private View BuildReportCard()
+    private AndroidView BuildReportCard()
     {
         var card = Card();
         card.AddView(Text("CORRUPTION REPORT", 11, "#A8A1B6"));
@@ -231,25 +255,37 @@ public sealed class MainActivity : Activity
         };
         card.SetPadding(Dp(16), Dp(16), Dp(16), Dp(16));
         card.SetBackgroundColor(Color.ParseColor("#15131E"));
-
-        var lp = new LinearLayout.LayoutParams(-1, -2)
+        card.LayoutParameters = new LinearLayout.LayoutParams(-1, -2)
         {
             BottomMargin = Dp(14)
         };
-        _root ??= null!;
-        return WrapCard(card, lp);
+        return card;
     }
 
-    private View WrapCard(LinearLayout card, ViewGroup.LayoutParams lp)
+    private void AddIntensityPreset(LinearLayout row, string label, int value)
     {
-        var container = new FrameLayout(this);
-        container.AddView(card, new FrameLayout.LayoutParams(-1, -2));
-        return container;
+        var button = Button(label);
+        button.SetTextColor(Color.ParseColor("#D8D0E5"));
+        button.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 11);
+        button.SetBackgroundColor(Color.ParseColor("#1D1A29"));
+        button.Click += (_, _) => SetIntensity(value);
+
+        row.AddView(button, new LinearLayout.LayoutParams(0, Dp(42), 1f)
+        {
+            LeftMargin = Dp(3),
+            RightMargin = Dp(3)
+        });
     }
 
-    private Switch SwitchControl(string label, bool checkedState)
+    private void SetIntensity(int value)
     {
-        var sw = new Switch(this)
+        _intensity.Progress = Math.Clamp(value, 5, 100) - 5;
+        _intensityValue.Text = $"{value}%";
+    }
+
+    private AndroidSwitch SwitchControl(string label, bool checkedState)
+    {
+        var sw = new AndroidSwitch(this)
         {
             Text = label,
             Checked = checkedState
@@ -269,9 +305,9 @@ public sealed class MainActivity : Activity
         return tv;
     }
 
-    private Button Button(string value)
+    private AndroidButton Button(string value)
     {
-        var button = new Button(this)
+        var button = new AndroidButton(this)
         {
             Text = value,
             AllCaps = false
