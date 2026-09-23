@@ -12,11 +12,17 @@ public static class ApkCorruptor
     private static readonly HashSet<string> UnityLooseExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg",
-        ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff"
+        ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff",
+        ".resource", ".ress"
     };
 
     private static bool IsSignatureEntry(string name)
     {
+        // Old APKs can contain this 32-byte signing stamp. It belongs to the
+        // original signing metadata and must not be copied into the rebuilt APK.
+        if (name.Equals("stamp-cert-sha256", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         if (!name.StartsWith("META-INF/", StringComparison.OrdinalIgnoreCase))
             return false;
 
@@ -38,7 +44,7 @@ public static class ApkCorruptor
         var lower = name.ToLowerInvariant();
         return lower.Contains("/bundles/")
             || lower.Contains("/streamingassets/")
-            || lower.Contains("/bin/data/")
+            || lower.EndsWith("/data.unity3d")
             || lower.EndsWith(".assets")
             || lower.EndsWith(".sharedassets")
             || lower.EndsWith(".unity3d")
@@ -227,7 +233,9 @@ public static class ApkCorruptor
             || ext.Equals(".mp3", StringComparison.OrdinalIgnoreCase)
             || ext.Equals(".m4a", StringComparison.OrdinalIgnoreCase)
             || ext.Equals(".aif", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".aiff", StringComparison.OrdinalIgnoreCase);
+            || ext.Equals(".aiff", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".resource", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".ress", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsAudio(string name)
