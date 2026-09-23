@@ -46,7 +46,11 @@ public final class ApkSignerBridge {
         }
 
         ApkSigner.SignerConfig signerConfig =
-                new ApkSigner.SignerConfig.Builder("APKCorrupt", cert, key).build();
+                new ApkSigner.SignerConfig.Builder(
+                "APKCorrupt",
+                key,
+                Collections.singletonList(cert))
+                .build();
 
         ApkSigner apkSigner = new ApkSigner.Builder(
                 Collections.singletonList(signerConfig))

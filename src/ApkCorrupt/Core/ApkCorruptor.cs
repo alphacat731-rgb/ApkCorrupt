@@ -11,7 +11,7 @@ public static class ApkCorruptor
 
     private static readonly HashSet<string> UnityLooseExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".png", ".jpg", ".jpeg", ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff"
+        ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff"
     };
 
     private static bool IsSignatureEntry(string name)
@@ -41,9 +41,7 @@ public static class ApkCorruptor
             || lower.EndsWith(".assets")
             || lower.EndsWith(".sharedassets")
             || lower.EndsWith(".unity3d")
-            || lower.EndsWith(".bundle")
-            || lower.Contains("/streamingassets/")
-            || lower.Contains("/bin/data/");
+            || lower.EndsWith(".bundle");
     }
 
     public static async Task<CorruptionResult> CorruptAsync(
@@ -207,8 +205,7 @@ public static class ApkCorruptor
         var lower = name.ToLowerInvariant();
         return lower.Equals("resources.arsc")
             || lower.EndsWith(".so")
-            || lower.Contains("/lib/")
-            || lower.Contains("\lib\");
+            || lower.Contains("/lib/");
     }
 
     private static void MutateBytesInPlace(byte[] bytes, int intensity, Random rng)

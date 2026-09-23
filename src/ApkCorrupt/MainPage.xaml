@@ -67,7 +67,7 @@
                         <Label Text="Audio mangling" Grid.Row="1" VerticalOptions="Center" />
                         <Switch x:Name="AudioSwitch" Grid.Column="1" Grid.Row="1" IsToggled="True" OnColor="{StaticResource Accent}" />
 
-                        <Label Text="Loose APK assets" Grid.Row="2" VerticalOptions="Center" />
+                        <Label Text="Raw audio fallback" Grid.Row="2" VerticalOptions="Center" />
                         <Switch x:Name="LooseSwitch" Grid.Column="1" Grid.Row="2" IsToggled="True" OnColor="{StaticResource Accent}" />
                     </Grid>
                 </VerticalStackLayout>

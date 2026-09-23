@@ -18,6 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />
     <PackageReference Include="AssetsTools.NET" Version="3.0.5" />
     <PackageReference Include="AssetsTools.NET.Texture" Version="3.0.2" />
     <AndroidMavenLibrary Include="com.android.tools.build:apksig"
