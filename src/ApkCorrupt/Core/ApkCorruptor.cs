@@ -47,7 +47,11 @@ public static class ApkCorruptor
             || lower.EndsWith(".assets")
             || lower.EndsWith(".sharedassets")
             || lower.EndsWith(".unity3d")
-            || lower.EndsWith(".bundle");
+            || lower.EndsWith(".bundle")
+            // Unity uses .resource for FMOD/FSB5 audio banks. Treat these
+            // as Unity candidates so the structured FSB5 mutator can edit
+            // the audio payload without touching unrelated APK files.
+            || lower.EndsWith(".resource");
     }
 
     public static async Task<CorruptionResult> CorruptAsync(
