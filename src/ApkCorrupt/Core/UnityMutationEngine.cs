@@ -129,11 +129,16 @@ public static class UnityMutationEngine
                 if (encoded is not { Length: > 0 })
                     continue;
 
+                // AssetsTools.NET.Texture 3.0.2 exposes the 3-argument overload.
+                // We deliberately normalize the mutated texture to RGBA32 so the
+                // encoded bytes and Unity's m_TextureFormat field agree.
                 texture.SetPictureData(
                     encoded,
                     texture.m_Width,
-                    texture.m_Height,
-                    TextureFormat.RGBA32);
+                    texture.m_Height);
+                texture.m_TextureFormat = (int)TextureFormat.RGBA32;
+                texture.m_MipMap = false;
+                texture.m_MipCount = 1;
 
                 texture.WriteTo(baseField);
                 info.SetNewData(baseField);
@@ -260,8 +265,10 @@ public static class UnityMutationEngine
                     texture.SetPictureData(
                         encoded,
                         texture.m_Width,
-                        texture.m_Height,
-                        TextureFormat.RGBA32);
+                        texture.m_Height);
+                    texture.m_TextureFormat = (int)TextureFormat.RGBA32;
+                    texture.m_MipMap = false;
+                    texture.m_MipCount = 1;
 
                     texture.WriteTo(baseField);
                     info.SetNewData(baseField);
