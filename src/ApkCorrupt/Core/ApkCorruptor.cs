@@ -248,6 +248,20 @@ public static class ApkCorruptor
     private static bool NeedsStore(string name)
     {
         var lower = name.ToLowerInvariant();
+
+        // Unity's binary data is intentionally stored uncompressed in APKs.
+        // Compressing these entries forces Android/Unity to inflate large
+        // AssetBundle/resource files before they can be consumed, which causes
+        // dramatically slower loading times on device.
+        if (lower.StartsWith("assets/bin/data/")
+            && (lower.EndsWith(".unity3d")
+                || lower.EndsWith(".assets")
+                || lower.EndsWith(".sharedassets")
+                || lower.EndsWith(".resource")
+                || lower.EndsWith(".ress")
+                || lower.EndsWith(".bundle")))
+            return true;
+
         return lower.Equals("resources.arsc")
             || lower.EndsWith(".so")
             || lower.Contains("/lib/");
