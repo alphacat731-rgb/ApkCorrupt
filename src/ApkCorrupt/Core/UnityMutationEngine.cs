@@ -680,54 +680,85 @@ public static class UnityMutationEngine
         if (length < 8)
             return false;
 
-        // Compressed block formats remain structurally valid when individual
-        // bits/bytes inside their image payload are changed. Keep corruption
-        // bounded so a texture is distorted rather than making its entire
-        // asset unreadable.
         var level = Math.Clamp(intensity, 1, 100) / 100.0;
-        var formatBoost = format is
-            TextureFormat.DXT1
-            or TextureFormat.DXT3
-            or TextureFormat.DXT5
-            or TextureFormat.BC4
-            or TextureFormat.BC5
-            or TextureFormat.BC6H
-            or TextureFormat.BC7
-            or TextureFormat.ETC_RGB4
-            or TextureFormat.ETC2_RGB4
-            or TextureFormat.ETC2_RGBA1
-            or TextureFormat.ETC2_RGBA8
-            or TextureFormat.ASTC_RGB_4x4
-            or TextureFormat.ASTC_RGBA_4x4
-            or TextureFormat.ASTC_RGB_5x5
-            or TextureFormat.ASTC_RGBA_5x5
-            or TextureFormat.ASTC_RGB_6x6
-            or TextureFormat.ASTC_RGBA_6x6
-            or TextureFormat.ASTC_RGB_8x8
-            or TextureFormat.ASTC_RGBA_8x8
-            or TextureFormat.ASTC_RGB_10x10
-            or TextureFormat.ASTC_RGBA_10x10
-            or TextureFormat.ASTC_RGB_12x12
-            or TextureFormat.ASTC_RGBA_12x12
-            ? 1.35
-            : 1.0;
-
-        var touches = (int)Math.Clamp(
-            length * (0.001 + (0.02 * level)) * formatBoost,
-            1,
-            50000);
-
         var endExclusive = startOffset + length;
-        var firstMutable = Math.Min(
-            endExclusive - 1,
-            startOffset + Math.Min(32, Math.Max(0, length / 20)));
 
-        if (firstMutable >= endExclusive)
-            firstMutable = startOffset;
+        // Texture payloads are raw encoded image bytes; there is no file header
+        // to preserve here. At high intensity, touch at least one byte in most
+        // compressed blocks so the corruption is visually obvious without
+        // changing texture dimensions, format IDs, or mip metadata.
+        var blockSize = GetTextureBlockSize(format);
+
+        if (intensity >= 90 && blockSize > 0)
+        {
+            var stride = intensity >= 100 ? blockSize : blockSize * 2;
+            var changed = false;
+
+            for (var blockStart = startOffset; blockStart < endExclusive; blockStart += stride)
+            {
+                var blockEnd = Math.Min(blockStart + blockSize, endExclusive);
+                if (blockEnd <= blockStart)
+                    continue;
+
+                // Keep the operation deterministic while spreading damage over
+                // the whole texture rather than concentrating it in a few bytes.
+                var index = blockStart + rng.Next(blockEnd - blockStart);
+
+                switch (rng.Next(6))
+                {
+                    case 0:
+                        data[index] ^= 0xFF;
+                        break;
+
+                    case 1:
+                        data[index] ^= (byte)(1 << rng.Next(8));
+                        break;
+
+                    case 2:
+                        data[index] = (byte)rng.Next(0, 256);
+                        break;
+
+                    case 3:
+                        data[index] = unchecked((byte)(data[index] + rng.Next(32, 224)));
+                        break;
+
+                    case 4:
+                        data[index] = unchecked((byte)(data[index] - rng.Next(32, 224)));
+                        break;
+
+                    default:
+                        data[index] ^= (byte)rng.Next(1, 256);
+                        break;
+                }
+
+                changed = true;
+
+                // CHAOS/100% gets a second mutation inside every block. This
+                // makes large atlases visibly wrecked instead of subtly noisy.
+                if (intensity >= 100 && blockEnd - blockStart >= 2)
+                {
+                    var second = blockStart + rng.Next(blockEnd - blockStart);
+                    if (second == index)
+                        second = blockStart + ((second - blockStart + 1) % (blockEnd - blockStart));
+
+                    data[second] ^= (byte)rng.Next(1, 256);
+                }
+            }
+
+            return changed;
+        }
+
+        // Lower intensities use distributed random touches. Increase the
+        // fraction with intensity so 50% is clearly visible while 10% stays
+        // relatively restrained.
+        var touches = (int)Math.Clamp(
+            length * (0.01 + (0.14 * level)),
+            24,
+            400000);
 
         for (var i = 0; i < touches; i++)
         {
-            var index = rng.Next(firstMutable, endExclusive);
+            var index = rng.Next(startOffset, endExclusive);
 
             switch (rng.Next(5))
             {
@@ -740,22 +771,59 @@ public static class UnityMutationEngine
                     break;
 
                 case 2:
-                    data[index] = unchecked(
-                        (byte)(data[index] + rng.Next(7, 120)));
+                    data[index] = (byte)rng.Next(0, 256);
                     break;
 
                 case 3:
                     data[index] = unchecked(
-                        (byte)(data[index] - rng.Next(7, 120)));
+                        (byte)(data[index] + rng.Next(17, 180)));
                     break;
 
                 default:
-                    data[index] = (byte)rng.Next(0, 256);
+                    data[index] = unchecked(
+                        (byte)(data[index] - rng.Next(17, 180)));
                     break;
             }
         }
 
         return touches > 0;
+    }
+
+    private static int GetTextureBlockSize(TextureFormat format)
+    {
+        return format switch
+        {
+            TextureFormat.DXT1
+                or TextureFormat.BC4
+                or TextureFormat.BC5 => 8,
+
+            TextureFormat.DXT3
+                or TextureFormat.DXT5
+                or TextureFormat.BC6H
+                or TextureFormat.BC7
+                or TextureFormat.ETC_RGB4
+                or TextureFormat.ETC2_RGB4
+                or TextureFormat.ETC2_RGBA1
+                or TextureFormat.ETC2_RGBA8
+                or TextureFormat.EAC_R
+                or TextureFormat.EAC_R_SIGNED
+                or TextureFormat.EAC_RG
+                or TextureFormat.EAC_RG_SIGNED
+                or TextureFormat.ASTC_RGB_4x4
+                or TextureFormat.ASTC_RGBA_4x4
+                or TextureFormat.ASTC_RGB_5x5
+                or TextureFormat.ASTC_RGBA_5x5
+                or TextureFormat.ASTC_RGB_6x6
+                or TextureFormat.ASTC_RGBA_6x6
+                or TextureFormat.ASTC_RGB_8x8
+                or TextureFormat.ASTC_RGBA_8x8
+                or TextureFormat.ASTC_RGB_10x10
+                or TextureFormat.ASTC_RGBA_10x10
+                or TextureFormat.ASTC_RGB_12x12
+                or TextureFormat.ASTC_RGBA_12x12 => 16,
+
+            _ => 0
+        };
     }
 
     private static bool TryMutateExternalAudio(
@@ -776,9 +844,7 @@ public static class UnityMutationEngine
             return false;
 
         var source = sourceField.AsString;
-        var offset = sourceField.TemplateField.ValueType == AssetValueType.String
-            ? offsetField.AsULong
-            : 0;
+        var offset = offsetField.AsULong;
         var size = sizeField.AsULong;
 
         if (string.IsNullOrWhiteSpace(source)
