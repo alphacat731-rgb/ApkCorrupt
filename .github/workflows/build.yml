@@ -36,9 +36,14 @@ jobs:
           echo "APK: $apk"
           echo "Checking that managed assemblies are embedded..."
 
-          if ! unzip -l "$apk" | grep -qE '(^|/)assemblies/'; then
-            echo "ERROR: Release APK does not contain embedded managed assemblies."
+          # .NET 9/10 Android normally stores managed assemblies in the ABI-specific
+          # assembly store under lib/, rather than the older assemblies/ directory.
+          # Accept both layouts so the check matches the actual APK format.
+          if ! unzip -l "$apk" | grep -qE '(^|/)(assemblies/|lib/[^/]+/(libassembly-store\.so|libassemblies\.[^/]+\.blob\.so))'; then
+            echo "ERROR: Release APK does not contain an embedded managed assembly store."
             echo "The APK must be self-contained so it can be installed and launched without Fast Deployment."
+            echo "APK contents matching managed assemblies:"
+            unzip -l "$apk" | grep -E '(^|/)(assemblies/|lib/)' | head -n 40 || true
             exit 1
           fi
 
