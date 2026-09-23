@@ -634,7 +634,7 @@ public static class UnityMutationEngine
         var textAssets = 0;
         var meshes = 0;
 
-        for (var i = 0; i < bundle.file.BlockAndDirInfo.DirectoryInfos.Count; i++
+        for (var i = 0; i < bundle.file.BlockAndDirInfo.DirectoryInfos.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
