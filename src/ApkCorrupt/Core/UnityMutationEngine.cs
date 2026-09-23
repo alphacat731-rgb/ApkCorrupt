@@ -135,9 +135,7 @@ public static class UnityMutationEngine
                 texture.SetPictureData(
                     encoded,
                     texture.m_Width,
-                    texture.m_Height,
-                    TextureFormat.RGBA32,
-                    1);
+                    texture.m_Height);
                 texture.m_TextureFormat = (int)TextureFormat.RGBA32;
                 texture.m_MipMap = false;
                 texture.m_MipCount = 1;
@@ -267,9 +265,7 @@ public static class UnityMutationEngine
                     texture.SetPictureData(
                     encoded,
                     texture.m_Width,
-                    texture.m_Height,
-                    TextureFormat.RGBA32,
-                    1);
+                    texture.m_Height);
                     texture.m_TextureFormat = (int)TextureFormat.RGBA32;
                     texture.m_MipMap = false;
                     texture.m_MipCount = 1;
