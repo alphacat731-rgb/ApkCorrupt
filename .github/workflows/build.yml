@@ -1,0 +1,36 @@
+name: Build APK Corrupt
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install MAUI Android workload
+        run: dotnet workload install maui-android
+
+      - name: Restore
+        run: dotnet restore ApkCorrupt.sln
+
+      - name: Build
+        run: dotnet build ApkCorrupt.sln -c Debug -f net10.0-android --no-restore
+
+      - name: Collect APK
+        run: |
+          mkdir -p artifacts
+          find src/ApkCorrupt/bin/Debug/net10.0-android -name "*.apk" -type f -exec cp {} artifacts/ \;
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apkcorrupt
+          path: artifacts/*.apk

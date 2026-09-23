@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.userosscache
+*.suo
+.DS_Store
+artifacts/

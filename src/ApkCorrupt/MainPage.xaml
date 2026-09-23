@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    x:Class="ApkCorrupt.MainPage"
+    NavigationPage.HasNavigationBar="False"
+    BackgroundColor="{StaticResource Bg}">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="22,28,22,36" Spacing="18">
+
+            <Grid ColumnDefinitions="*,Auto">
+                <VerticalStackLayout Spacing="2">
+                    <Label Text="APK CORRUPT" FontSize="28" FontFamily="OpenSansSemibold" />
+                    <Label Text="Unity mutation laboratory" FontSize="13" TextColor="{StaticResource Muted}" />
+                </VerticalStackLayout>
+                <Border Grid.Column="1"
+                        BackgroundColor="{StaticResource AccentSoft}"
+                        StrokeThickness="0"
+                        Padding="10,8"
+                        StrokeShape="RoundRectangle 14">
+                    <Label Text="v0.1" FontSize="12" TextColor="{StaticResource Accent}" />
+                </Border>
+            </Grid>
+
+            <Border Padding="16"
+                    BackgroundColor="{StaticResource Panel}"
+                    StrokeThickness="1"
+                    Stroke="#282232"
+                    StrokeShape="RoundRectangle 22">
+                <VerticalStackLayout Spacing="12">
+                    <Label Text="SOURCE APK" FontSize="11" TextColor="{StaticResource Muted}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <VerticalStackLayout Grid.Column="0" Spacing="3">
+                            <Label x:Name="FileNameLabel" Text="No APK selected" FontSize="16" />
+                            <Label x:Name="FileMetaLabel" Text="Pick an APK to inspect its Unity layout" FontSize="12" TextColor="{StaticResource Muted}" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="1" Text="Pick" Clicked="OnPickClicked" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Padding="16"
+                    BackgroundColor="{StaticResource Panel}"
+                    StrokeThickness="1"
+                    Stroke="#282232"
+                    StrokeShape="RoundRectangle 22">
+                <VerticalStackLayout Spacing="14">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <Label Text="CORRUPTION" FontSize="11" TextColor="{StaticResource Muted}" />
+                        <Label Grid.Column="1" x:Name="IntensityLabel" Text="55%" FontSize="13" TextColor="{StaticResource Accent}" />
+                    </Grid>
+
+                    <Slider x:Name="IntensitySlider"
+                            Minimum="5"
+                            Maximum="100"
+                            Value="55"
+                            MinimumTrackColor="{StaticResource Accent}"
+                            MaximumTrackColor="#332C3D"
+                            ThumbColor="{StaticResource Accent}"
+                            ValueChanged="OnIntensityChanged" />
+
+                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto" RowSpacing="11">
+                        <Label Text="Texture surgery" VerticalOptions="Center" />
+                        <Switch x:Name="TexturesSwitch" Grid.Column="1" IsToggled="True" OnColor="{StaticResource Accent}" />
+
+                        <Label Text="Audio mangling" Grid.Row="1" VerticalOptions="Center" />
+                        <Switch x:Name="AudioSwitch" Grid.Column="1" Grid.Row="1" IsToggled="True" OnColor="{StaticResource Accent}" />
+
+                        <Label Text="Loose APK assets" Grid.Row="2" VerticalOptions="Center" />
+                        <Switch x:Name="LooseSwitch" Grid.Column="1" Grid.Row="2" IsToggled="True" OnColor="{StaticResource Accent}" />
+                    </Grid>
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Padding="16"
+                    BackgroundColor="{StaticResource Panel}"
+                    StrokeThickness="1"
+                    Stroke="#282232"
+                    StrokeShape="RoundRectangle 22">
+                <VerticalStackLayout Spacing="10">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <Label Text="DETERMINISTIC SEED" FontSize="11" TextColor="{StaticResource Muted}" />
+                        <Button Grid.Column="1" Text="Randomize" FontSize="12" Padding="12,8" Clicked="OnRandomizeSeedClicked" />
+                    </Grid>
+                    <Entry x:Name="SeedEntry"
+                           Text="48291371"
+                           Keyboard="Numeric"
+                           BackgroundColor="{StaticResource Panel2}"
+                           TextColor="{StaticResource Text}"
+                           Placeholder="8 digit seed" />
+                    <Label Text="Same APK + same settings + same seed = same mutation." FontSize="12" TextColor="{StaticResource Muted}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Padding="16"
+                    BackgroundColor="{StaticResource Panel}"
+                    StrokeThickness="1"
+                    Stroke="#282232"
+                    StrokeShape="RoundRectangle 22">
+                <VerticalStackLayout Spacing="10">
+                    <Label Text="CORRUPTION REPORT" FontSize="11" TextColor="{StaticResource Muted}" />
+                    <Label x:Name="StatusLabel" Text="Idle. Nothing has been sacrificed yet." FontSize="13" />
+                    <Label x:Name="StatsLabel" Text="Textures 0 · Audio 0 · Files 0" FontSize="12" TextColor="{StaticResource Muted}" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Button x:Name="CorruptButton"
+                    Text="CORRUPT APK"
+                    HeightRequest="58"
+                    FontSize="16"
+                    BackgroundColor="{StaticResource Accent}"
+                    Clicked="OnCorruptClicked" />
+
+            <Button x:Name="InstallButton"
+                    Text="OPEN LAST APK"
+                    IsVisible="False"
+                    HeightRequest="50"
+                    BackgroundColor="{StaticResource AccentSoft}"
+                    Clicked="OnOpenLastClicked" />
+
+            <Label Text="The mutation engine deliberately avoids Unity managed code, Android manifest entries, and native libraries." 
+                   FontSize="11"
+                   TextColor="{StaticResource Muted}"
+                   HorizontalTextAlignment="Center" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>
