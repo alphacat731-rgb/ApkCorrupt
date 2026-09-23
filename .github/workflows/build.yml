@@ -22,15 +22,30 @@ jobs:
         run: dotnet restore ApkCorrupt.sln
 
       - name: Build
-        run: dotnet build ApkCorrupt.sln -c Debug -f net10.0-android --no-restore
+        run: dotnet build ApkCorrupt.sln -c Debug -f net10.0-android --no-restore -p:EmbedAssembliesIntoApk=true
 
-      - name: Collect APK
+      - name: Collect and verify APK
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
-          find src/ApkCorrupt/bin/Debug/net10.0-android -name "*.apk" -type f -exec cp {} artifacts/ \;
+
+          apk="$(find src/ApkCorrupt/bin/Debug/net10.0-android -name '*.apk' -type f | head -n 1)"
+          test -n "$apk"
+
+          echo "APK: $apk"
+          echo "Checking that managed assemblies are embedded..."
+
+          if ! unzip -l "$apk" | grep -qE '(^|/)assemblies/'; then
+            echo "ERROR: APK does not contain embedded managed assemblies."
+            echo "This would produce the 'No assemblies found' Fast Deployment crash on a standalone install."
+            exit 1
+          fi
+
+          cp "$apk" artifacts/ApkCorrupt.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: apkcorrupt
-          path: artifacts/*.apk
+          path: artifacts/ApkCorrupt.apk
