@@ -135,7 +135,9 @@ public static class UnityMutationEngine
                 texture.SetPictureData(
                     encoded,
                     texture.m_Width,
-                    texture.m_Height);
+                    texture.m_Height,
+                    TextureFormat.RGBA32,
+                    1);
                 texture.m_TextureFormat = (int)TextureFormat.RGBA32;
                 texture.m_MipMap = false;
                 texture.m_MipCount = 1;
@@ -263,9 +265,11 @@ public static class UnityMutationEngine
                         continue;
 
                     texture.SetPictureData(
-                        encoded,
-                        texture.m_Width,
-                        texture.m_Height);
+                    encoded,
+                    texture.m_Width,
+                    texture.m_Height,
+                    TextureFormat.RGBA32,
+                    1);
                     texture.m_TextureFormat = (int)TextureFormat.RGBA32;
                     texture.m_MipMap = false;
                     texture.m_MipCount = 1;
@@ -460,23 +464,68 @@ public static class UnityMutationEngine
         if (width <= 0 || height <= 0 || pixels.Length < 4)
             return;
 
-        var pixelCount = Math.Min(
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var pixelCountLong = Math.Min(
             (long)width * height,
             pixels.Length / 4L);
 
-        var touches = (int)Math.Clamp(
-            pixelCount * Math.Clamp(intensity, 1, 100) / 900L,
-            8,
-            50000);
+        if (pixelCountLong <= 0)
+            return;
 
-        for (var i = 0; i < touches; i++)
+        var pixelCount = (int)Math.Min(pixelCountLong, int.MaxValue);
+
+        // At high intensity, transform every pixel so the result is visually
+        // obvious even on large atlases. Lower intensities stay sparse.
+        if (intensity >= 90)
         {
-            var x = rng.Next(width);
-            var y = rng.Next(height);
-            var index = checked((y * width + x) * 4);
+            for (var i = 0; i + 3 < pixels.Length; i += 4)
+            {
+                switch (rng.Next(5))
+                {
+                    case 0:
+                        pixels[i] = (byte)(255 - pixels[i]);
+                        pixels[i + 1] = (byte)(255 - pixels[i + 1]);
+                        pixels[i + 2] = (byte)(255 - pixels[i + 2]);
+                        break;
 
-            if (index + 3 >= pixels.Length)
-                continue;
+                    case 1:
+                        (pixels[i], pixels[i + 2]) = (pixels[i + 2], pixels[i]);
+                        pixels[i + 1] ^= 0x7F;
+                        break;
+
+                    case 2:
+                        pixels[i] = (byte)((pixels[i] & 0x3F) | 0xC0);
+                        pixels[i + 1] = (byte)((pixels[i + 1] & 0x3F) | 0x80);
+                        pixels[i + 2] = (byte)(255 - pixels[i + 2]);
+                        break;
+
+                    case 3:
+                        pixels[i] = (byte)rng.Next(0, 256);
+                        pixels[i + 1] = (byte)rng.Next(0, 256);
+                        pixels[i + 2] = (byte)rng.Next(0, 256);
+                        break;
+
+                    default:
+                        var neighbor = rng.Next(pixelCount) * 4;
+                        pixels[i] = pixels[neighbor];
+                        pixels[i + 1] = pixels[neighbor + 1];
+                        pixels[i + 2] = pixels[neighbor + 2];
+                        break;
+                }
+            }
+
+            return;
+        }
+
+        var randomTouches = (int)Math.Clamp(
+            pixelCountLong * (0.01 + level * 0.08),
+            32,
+            120000);
+
+        for (var i = 0; i < randomTouches; i++)
+        {
+            var pixel = rng.Next(pixelCount);
+            var index = pixel * 4;
 
             switch (rng.Next(6))
             {
@@ -496,14 +545,14 @@ public static class UnityMutationEngine
                     pixels[index + 3] = (byte)rng.Next(40, 256);
                     break;
                 default:
-                    var nearby = Math.Clamp(
-                        index + rng.Next(-8, 9) * 4,
+                    var neighborPixel = Math.Clamp(
+                        pixel + rng.Next(-8, 9),
                         0,
-                        pixels.Length - 4);
-
-                    pixels[index] = pixels[nearby];
-                    pixels[index + 1] = pixels[nearby + 1];
-                    pixels[index + 2] = pixels[nearby + 2];
+                        pixelCount - 1);
+                    var neighbor = neighborPixel * 4;
+                    pixels[index] = pixels[neighbor];
+                    pixels[index + 1] = pixels[neighbor + 1];
+                    pixels[index + 2] = pixels[neighbor + 2];
                     break;
             }
         }
