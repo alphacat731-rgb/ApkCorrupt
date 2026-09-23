@@ -11,10 +11,16 @@ public sealed record CorruptionProgress(
     string Message,
     int TexturesChanged,
     int AudioChanged,
-    int FilesChanged);
+    int FilesChanged,
+    int MaterialsChanged = 0,
+    int TextAssetsChanged = 0,
+    int MeshesChanged = 0);
 
 public sealed record CorruptionResult(
     string OutputPath,
     int TexturesChanged,
     int AudioChanged,
-    int FilesChanged);
+    int FilesChanged,
+    int MaterialsChanged = 0,
+    int TextAssetsChanged = 0,
+    int MeshesChanged = 0);
