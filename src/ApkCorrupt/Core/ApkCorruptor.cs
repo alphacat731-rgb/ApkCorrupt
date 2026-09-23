@@ -11,6 +11,7 @@ public static class ApkCorruptor
 
     private static readonly HashSet<string> UnityLooseExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
+        ".png", ".jpg", ".jpeg",
         ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff"
     };
 
@@ -65,6 +66,7 @@ public static class ApkCorruptor
         var textureCount = 0;
         var audioCount = 0;
         var filesChanged = 0;
+        var candidateIndex = 0;
 
         try
         {
@@ -83,15 +85,28 @@ public static class ApkCorruptor
                         continue;
 
                     var isUnity = IsUnityCandidate(entry.FullName);
-                    var isLoose = options.LooseAssets && UnityLooseExtensions.Contains(Path.GetExtension(entry.FullName));
+                    var isLoose = options.LooseAssets
+                        && UnityLooseExtensions.Contains(Path.GetExtension(entry.FullName));
 
                     byte[]? mutated = null;
 
                     if (isUnity)
                     {
-                        var safeName = string.Concat(Path.GetFileName(entry.FullName).Select(c => char.IsLetterOrDigit(c) || c == '.' || c == '-' || c == '_' ? c : '_'));
-                        if (string.IsNullOrWhiteSpace(safeName)) safeName = "candidate.bin";
-                        var candidate = Path.Combine(workDir, safeName);
+                        // Use a unique working filename: Unity APKs commonly contain
+                        // repeated basenames across different bundle/resource folders.
+                        var safeName = string.Concat(
+                            Path.GetFileName(entry.FullName)
+                                .Select(c => char.IsLetterOrDigit(c) || c == '.' || c == '-' || c == '_'
+                                    ? c
+                                    : '_'));
+
+                        if (string.IsNullOrWhiteSpace(safeName))
+                            safeName = "candidate.bin";
+
+                        var candidate = Path.Combine(
+                            workDir,
+                            $"candidate-{candidateIndex++:D6}-{safeName}");
+
                         await using (var src = entry.Open())
                         await using (var dst = File.Create(candidate))
                         {
@@ -108,7 +123,10 @@ public static class ApkCorruptor
 
                             if (mutation.Changed)
                             {
-                                mutated = await File.ReadAllBytesAsync(mutation.OutputPath, cancellationToken);
+                                mutated = await File.ReadAllBytesAsync(
+                                    mutation.OutputPath,
+                                    cancellationToken);
+
                                 textureCount += mutation.TexturesChanged;
                                 audioCount += mutation.AudioChanged;
                                 filesChanged++;
@@ -126,10 +144,12 @@ public static class ApkCorruptor
                         {
                             MutateBytesInPlace(bytes, options.Intensity, rng);
                             mutated = bytes;
+
                             if (IsAudio(entry.FullName))
                                 audioCount++;
                             else
                                 textureCount++;
+
                             filesChanged++;
                         }
                     }
@@ -159,13 +179,29 @@ public static class ApkCorruptor
                 }
             }
 
-            await ApkSignerBridge.GenerateKeyMaterialAsync(keyPath, certPath, cancellationToken);
-            await ApkSignerBridge.AlignAndSignAsync(unsigned, signed, keyPath, certPath, cancellationToken);
+            await ApkSignerBridge.GenerateKeyMaterialAsync(
+                keyPath,
+                certPath,
+                cancellationToken);
+
+            await ApkSignerBridge.AlignAndSignAsync(
+                unsigned,
+                signed,
+                keyPath,
+                certPath,
+                cancellationToken);
 
             var filename = $"APKCorrupt_{DateTime.Now:yyyyMMdd_HHmmss}.apk";
-            var finalPath = await ApkExport.CopyToDownloadsAsync(signed, filename, cancellationToken);
+            var finalPath = await ApkExport.CopyToDownloadsAsync(
+                signed,
+                filename,
+                cancellationToken);
 
-            return new CorruptionResult(finalPath, textureCount, audioCount, filesChanged);
+            return new CorruptionResult(
+                finalPath,
+                textureCount,
+                audioCount,
+                filesChanged);
         }
         finally
         {
@@ -213,7 +249,10 @@ public static class ApkCorruptor
         if (bytes.Length < 32)
             return;
 
-        var count = Math.Max(1, (bytes.Length * Math.Clamp(intensity, 1, 100)) / 500);
+        var count = Math.Max(
+            1,
+            (bytes.Length * Math.Clamp(intensity, 1, 100)) / 500);
+
         var start = bytes.Length / 20;
         var end = bytes.Length - 4;
 
@@ -221,6 +260,7 @@ public static class ApkCorruptor
         {
             var index = rng.Next(start, Math.Max(start + 1, end));
             var mode = rng.Next(4);
+
             switch (mode)
             {
                 case 0:
@@ -230,10 +270,12 @@ public static class ApkCorruptor
                     bytes[index] = (byte)rng.Next(0, 256);
                     break;
                 case 2:
-                    bytes[index] = unchecked((byte)(bytes[index] + rng.Next(17, 97)));
+                    bytes[index] = unchecked(
+                        (byte)(bytes[index] + rng.Next(17, 97)));
                     break;
                 default:
-                    bytes[index] = unchecked((byte)(bytes[index] - rng.Next(17, 97)));
+                    bytes[index] = unchecked(
+                        (byte)(bytes[index] - rng.Next(17, 97)));
                     break;
             }
         }
