@@ -56,7 +56,7 @@ public static class UnityMutationEngine
             }
         }
 
-        return new MutationResult(false, inputPath, 0, 0);
+        return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
     }
 
     private static bool IsFsb5(string path)
@@ -173,7 +173,7 @@ public static class UnityMutationEngine
         }
 
         if (!changed)
-            return new MutationResult(false, inputPath, 0, 0);
+            return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
 
         await File.WriteAllBytesAsync(outputPath, bytes, cancellationToken);
 
@@ -181,7 +181,10 @@ public static class UnityMutationEngine
             true,
             outputPath,
             0,
-            sampleCount);
+            sampleCount,
+            0,
+            0,
+            0);
     }
 
     private static bool TryParseFsb5Container(
@@ -807,7 +810,7 @@ public static class UnityMutationEngine
             || textAssets > 0
             || meshes > 0;
         if (!anyBundleChanges)
-            return new MutationResult(false, inputPath, 0, 0);
+            return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
 
         await Task.Run(() =>
         {
@@ -1300,7 +1303,7 @@ public static class UnityMutationEngine
             var index = rng.Next(chars.Length);
             var ch = chars[index];
 
-            if (ch == '\\n' || ch == '\\r' || ch == '\\t')
+            if (ch == '\n' || ch == '\r' || ch == '\t')
                 continue;
 
             if (char.IsLetterOrDigit(ch))
