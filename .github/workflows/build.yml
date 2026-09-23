@@ -21,8 +21,8 @@ jobs:
       - name: Restore
         run: dotnet restore ApkCorrupt.sln
 
-      - name: Build
-        run: dotnet build ApkCorrupt.sln -c Debug -f net10.0-android --no-restore -p:EmbedAssembliesIntoApk=true
+      - name: Build standalone APK
+        run: dotnet build ApkCorrupt.sln -c Release -f net10.0-android --no-restore
 
       - name: Collect and verify APK
         shell: bash
@@ -30,15 +30,15 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
 
-          apk="$(find src/ApkCorrupt/bin/Debug/net10.0-android -name '*.apk' -type f | head -n 1)"
+          apk="$(find src/ApkCorrupt/bin/Release/net10.0-android -name '*.apk' -type f | head -n 1)"
           test -n "$apk"
 
           echo "APK: $apk"
           echo "Checking that managed assemblies are embedded..."
 
           if ! unzip -l "$apk" | grep -qE '(^|/)assemblies/'; then
-            echo "ERROR: APK does not contain embedded managed assemblies."
-            echo "This would produce the 'No assemblies found' Fast Deployment crash on a standalone install."
+            echo "ERROR: Release APK does not contain embedded managed assemblies."
+            echo "The APK must be self-contained so it can be installed and launched without Fast Deployment."
             exit 1
           fi
 
