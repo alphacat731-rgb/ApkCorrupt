@@ -113,33 +113,60 @@ public static class UnityMutationEngine
     {
         var bytes = await File.ReadAllBytesAsync(inputPath, cancellationToken);
 
-        if (!TryParseFsb5(bytes, out var fsb))
-            return new MutationResult(false, inputPath, 0, 0);
-
+        var position = 0;
+        var sampleCount = 0;
+        var containerCount = 0;
         var changed = false;
 
-        foreach (var sample in fsb.Samples)
+        // Unity's .resource files can contain many FSB5 containers concatenated
+        // back-to-back. A previous implementation only touched the first one,
+        // which is why audio often appeared completely unchanged.
+        while (position + 0x3C <= bytes.Length
+               && bytes.AsSpan(position, 4).SequenceEqual("FSB5"u8))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (sample.End <= sample.Start)
-                continue;
+            if (!TryParseFsb5Container(bytes, position, out var fsb))
+                break;
 
-            if (fsb.Mode == Fsb5Vorbis)
+            foreach (var sample in fsb.Samples)
             {
-                changed |= MutateFsb5VorbisSample(
-                    bytes, sample.Start, sample.End, options.Intensity, rng);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (sample.End <= sample.Start)
+                    continue;
+
+                if (fsb.Mode == Fsb5Vorbis)
+                {
+                    if (MutateFsb5VorbisSample(
+                        bytes,
+                        sample.Start,
+                        sample.End,
+                        options.Intensity,
+                        rng))
+                    {
+                        sampleCount++;
+                        changed = true;
+                    }
+                }
+                else
+                {
+                    if (MutateEncodedRegion(
+                        bytes,
+                        sample.Start,
+                        sample.End - sample.Start,
+                        options.Intensity,
+                        rng,
+                        preservePrefix: 16))
+                    {
+                        sampleCount++;
+                        changed = true;
+                    }
+                }
             }
-            else
-            {
-                changed |= MutateEncodedRegion(
-                    bytes,
-                    sample.Start,
-                    sample.End,
-                    options.Intensity,
-                    rng,
-                    preservePrefix: 16);
-            }
+
+            containerCount++;
+            position = fsb.End;
         }
 
         if (!changed)
@@ -147,63 +174,85 @@ public static class UnityMutationEngine
 
         await File.WriteAllBytesAsync(outputPath, bytes, cancellationToken);
 
-        return new MutationResult(true, outputPath, 0, 1);
+        return new MutationResult(
+            true,
+            outputPath,
+            0,
+            sampleCount);
     }
 
-    private static bool TryParseFsb5(
+    private static bool TryParseFsb5Container(
         byte[] bytes,
+        int containerStart,
         out Fsb5Info fsb)
     {
         fsb = default;
 
-        if (bytes.Length < 0x3C
-            || !bytes.AsSpan(0, 4).SequenceEqual("FSB5"u8))
+        if (containerStart < 0
+            || containerStart + 0x3C > bytes.Length
+            || !bytes.AsSpan(containerStart, 4).SequenceEqual("FSB5"u8))
             return false;
 
         try
         {
-            var version = ReadUInt32LE(bytes, 4);
+            var version = ReadUInt32LE(bytes, containerStart + 4);
             if (version is not (0u or 1u))
                 return false;
 
-            var numSamples = ReadUInt32LE(bytes, 8);
-            var sampleHeadersSize = ReadUInt32LE(bytes, 12);
-            var nameTableSize = ReadUInt32LE(bytes, 16);
-            var dataSize = ReadUInt32LE(bytes, 20);
-            var mode = ReadUInt32LE(bytes, 24);
+            var numSamples = ReadUInt32LE(bytes, containerStart + 8);
+            var sampleHeadersSize = ReadUInt32LE(bytes, containerStart + 12);
+            var nameTableSize = ReadUInt32LE(bytes, containerStart + 16);
+            var dataSize = ReadUInt32LE(bytes, containerStart + 20);
+            var mode = ReadUInt32LE(bytes, containerStart + 24);
 
-            var headerSize = version == 0 ? 0x40 : 0x3C;
-            var metadataEnd = checked(
-                (ulong)headerSize
-                + sampleHeadersSize
-                + nameTableSize);
-
-            if (metadataEnd > (ulong)bytes.Length
-                || dataSize > (ulong)bytes.Length - metadataEnd)
+            if (numSamples == 0 || numSamples > 100000)
                 return false;
 
-            var sampleHeaderPos = headerSize;
-            var sampleHeadersEnd = checked(
-                (ulong)headerSize + sampleHeadersSize);
+            var headerSize = version == 0 ? 0x40 : 0x3C;
 
+            var sampleHeadersStart = checked(
+                containerStart + headerSize);
+
+            var sampleHeadersEnd = checked(
+                (long)sampleHeadersStart + sampleHeadersSize);
+
+            if (sampleHeadersEnd > bytes.Length)
+                return false;
+
+            var dataStart = checked(
+                sampleHeadersEnd + nameTableSize);
+
+            var dataEnd = checked(
+                dataStart + dataSize);
+
+            if (dataEnd > bytes.Length)
+                return false;
+
+            var sampleHeaderPos = sampleHeadersStart;
             var offsets = new List<ulong>(
-                checked((int)Math.Min(numSamples, 100000u)));
+                checked((int)numSamples));
 
             for (var i = 0u; i < numSamples; i++)
             {
-                if ((ulong)sampleHeaderPos + 8 > sampleHeadersEnd)
+                if ((long)sampleHeaderPos + 8 > sampleHeadersEnd)
                     return false;
 
                 var raw = ReadUInt64LE(bytes, sampleHeaderPos);
                 sampleHeaderPos += 8;
 
+                // FSB5 sample header:
+                // bit 0 = more metadata chunks
+                // bits 1..4 = frequency index
+                // bit 5 = stereo flag
+                // bits 6..33 = data offset in 16-byte units
+                // bits 34..63 = decoded sample count
                 var hasChunks = (raw & 1UL) != 0;
                 var dataOffset = ((raw >> 6) & 0x0FFFFFFFUL) * 16UL;
                 offsets.Add(dataOffset);
 
                 while (hasChunks)
                 {
-                    if ((ulong)sampleHeaderPos + 4 > sampleHeadersEnd)
+                    if ((long)sampleHeaderPos + 4 > sampleHeadersEnd)
                         return false;
 
                     var chunkHeader = ReadUInt32LE(bytes, sampleHeaderPos);
@@ -212,18 +261,20 @@ public static class UnityMutationEngine
                     hasChunks = (chunkHeader & 1u) != 0;
                     var chunkSize = (chunkHeader >> 1) & 0x00FFFFFFu;
 
-                    if ((ulong)sampleHeaderPos + chunkSize > sampleHeadersEnd)
+                    if ((long)sampleHeaderPos + chunkSize > sampleHeadersEnd)
                         return false;
 
                     sampleHeaderPos += checked((int)chunkSize);
                 }
+
+                // FSB5 sample headers are padded to 16-byte boundaries.
+                sampleHeaderPos = Align16(
+                    sampleHeaderPos,
+                    sampleHeadersStart);
+
+                if ((long)sampleHeaderPos > sampleHeadersEnd)
+                    return false;
             }
-
-            if ((ulong)sampleHeaderPos > sampleHeadersEnd)
-                return false;
-
-            var dataStart = checked(
-                (ulong)headerSize + sampleHeadersSize + nameTableSize);
 
             var samples = new List<Fsb5Sample>(offsets.Count);
 
@@ -232,7 +283,7 @@ public static class UnityMutationEngine
                 var startOffset = offsets[i];
                 var endOffset = (ulong)dataSize;
 
-                if (i + 1 < offsets.Count && offsets[i + 1] > startOffset)
+                if (i + 1 < offsets.Count)
                     endOffset = offsets[i + 1];
 
                 if (startOffset >= (ulong)dataSize
@@ -240,8 +291,8 @@ public static class UnityMutationEngine
                     || endOffset <= startOffset)
                     continue;
 
-                var start = checked((int)(dataStart + startOffset));
-                var end = checked((int)(dataStart + endOffset));
+                var start = checked((int)((ulong)dataStart + startOffset));
+                var end = checked((int)((ulong)dataStart + endOffset));
 
                 samples.Add(new Fsb5Sample(start, end));
             }
@@ -249,13 +300,25 @@ public static class UnityMutationEngine
             if (samples.Count == 0)
                 return false;
 
-            fsb = new Fsb5Info(mode, samples);
+            fsb = new Fsb5Info(
+                mode,
+                samples,
+                checked((int)dataEnd));
+
             return true;
         }
         catch
         {
             return false;
         }
+    }
+
+    private static int Align16(
+        int value,
+        int origin)
+    {
+        var relative = value - origin;
+        return origin + ((relative + 15) / 16 * 16);
     }
 
     private static bool MutateFsb5VorbisSample(
@@ -276,15 +339,14 @@ public static class UnityMutationEngine
             if (packetSize == 0)
                 break;
 
-            var packetEnd = pos + 2 + packetSize;
+            // The FSB5 Vorbis packet size includes the one-byte audio/continuation
+            // flag that follows the uint16 size.
+            var packetEnd = checked(pos + 2 + packetSize);
             if (packetEnd > end)
                 break;
 
-            // A FSB5 Vorbis packet is: uint16 size + uint8 flags + payload.
-            // Skip a few bytes at the front of every packet so the packet
-            // framing stays intact and corruption lands in the encoded audio.
-            var payloadStart = pos + 2 + 1 + 4;
-            if (packetIndex >= 2 && payloadStart < packetEnd)
+            var payloadStart = pos + 3;
+            if (packetIndex >= 3 && payloadStart < packetEnd)
                 ranges.Add((payloadStart, packetEnd));
 
             pos = packetEnd;
@@ -294,45 +356,81 @@ public static class UnityMutationEngine
         if (ranges.Count == 0)
             return false;
 
-        var totalMutable = ranges.Sum(r => (long)r.End - r.Start);
-        if (totalMutable <= 0)
-            return false;
-
         var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var totalMutable = ranges.Sum(r => (long)r.End - r.Start);
 
-        // Keep FSB5 structure intact while making the encoded Vorbis data
-        // audibly unstable. At 100%, about 3% of the mutable packet payload
-        // bytes are touched instead of destroying the whole bank.
-        var fraction = 0.002 + (0.028 * level);
+        // Make the effect unmistakable. We deliberately preserve packet
+        // framing and the first three Vorbis packets (identification/comments/
+        // setup), but aggressively damage the actual audio packets.
+        var fraction = 0.04 + (0.36 * level);
         var touches = (int)Math.Clamp(
             totalMutable * fraction,
-            1,
-            60000);
+            8,
+            250000);
 
         for (var i = 0; i < touches; i++)
         {
             var range = ranges[rng.Next(ranges.Count)];
             var index = rng.Next(range.Start, range.End);
 
-            switch (rng.Next(4))
+            switch (rng.Next(5))
             {
                 case 0:
-                    bytes[index] ^= (byte)(1 << rng.Next(8));
+                    bytes[index] ^= 0xFF;
                     break;
 
                 case 1:
-                    bytes[index] ^= (byte)rng.Next(1, 256);
+                    bytes[index] ^= (byte)(1 << rng.Next(8));
                     break;
 
                 case 2:
+                    bytes[index] = (byte)rng.Next(0, 256);
+                    break;
+
+                case 3:
                     bytes[index] = unchecked(
-                        (byte)(bytes[index] + rng.Next(9, 80)));
+                        (byte)(bytes[index] + rng.Next(32, 224)));
                     break;
 
                 default:
                     bytes[index] = unchecked(
-                        (byte)(bytes[index] - rng.Next(9, 80)));
+                        (byte)(bytes[index] - rng.Next(32, 224)));
                     break;
+            }
+        }
+
+        // Add occasional contiguous glitches at higher intensities. This tends
+        // to create audible clicks/tears rather than a mostly transparent bit
+        // error that a Vorbis decoder can conceal.
+        if (level >= 0.50)
+        {
+            var glitchCount = Math.Clamp(
+                ranges.Count / 12,
+                1,
+                120);
+
+            for (var i = 0; i < glitchCount; i++)
+            {
+                var range = ranges[rng.Next(ranges.Count)];
+                var maxLength = Math.Min(
+                    512,
+                    Math.Max(8, range.End - range.Start));
+
+                var glitchLength = Math.Min(
+                    maxLength,
+                    8 + rng.Next(Math.Max(1, maxLength - 7)));
+
+                if (glitchLength <= 0)
+                    continue;
+
+                var startIndex = rng.Next(
+                    range.Start,
+                    range.End - glitchLength + 1);
+
+                for (var j = 0; j < glitchLength; j++)
+                {
+                    bytes[startIndex + j] ^= (byte)rng.Next(1, 256);
+                }
             }
         }
 
@@ -682,79 +780,68 @@ public static class UnityMutationEngine
 
         var level = Math.Clamp(intensity, 1, 100) / 100.0;
         var endExclusive = startOffset + length;
-
-        // Texture payloads are raw encoded image bytes; there is no file header
-        // to preserve here. At high intensity, touch at least one byte in most
-        // compressed blocks so the corruption is visually obvious without
-        // changing texture dimensions, format IDs, or mip metadata.
         var blockSize = GetTextureBlockSize(format);
 
-        if (intensity >= 90 && blockSize > 0)
+        // Corrupt a substantial portion of the encoded data at high intensity.
+        // The format/header metadata is untouched, but enough block bytes are
+        // changed to produce obvious texture artifacts instead of a visually
+        // identical texture with a few hidden bit errors.
+        var fraction = intensity >= 90
+            ? 0.12 + (0.23 * level)
+            : 0.01 + (0.14 * level);
+
+        var touches = (int)Math.Clamp(
+            length * fraction,
+            24,
+            700000);
+
+        if (blockSize > 0 && intensity >= 65)
         {
-            var stride = intensity >= 100 ? blockSize : blockSize * 2;
+            var stride = intensity >= 90
+                ? Math.Max(1, blockSize / 2)
+                : blockSize;
+
             var changed = false;
 
-            for (var blockStart = startOffset; blockStart < endExclusive; blockStart += stride)
+            for (var blockStart = startOffset;
+                 blockStart < endExclusive;
+                 blockStart += stride)
             {
-                var blockEnd = Math.Min(blockStart + blockSize, endExclusive);
+                var blockEnd = Math.Min(
+                    blockStart + blockSize,
+                    endExclusive);
+
                 if (blockEnd <= blockStart)
                     continue;
 
-                // Keep the operation deterministic while spreading damage over
-                // the whole texture rather than concentrating it in a few bytes.
-                var index = blockStart + rng.Next(blockEnd - blockStart);
+                var index = blockStart + rng.Next(
+                    blockEnd - blockStart);
 
-                switch (rng.Next(6))
-                {
-                    case 0:
-                        data[index] ^= 0xFF;
-                        break;
-
-                    case 1:
-                        data[index] ^= (byte)(1 << rng.Next(8));
-                        break;
-
-                    case 2:
-                        data[index] = (byte)rng.Next(0, 256);
-                        break;
-
-                    case 3:
-                        data[index] = unchecked((byte)(data[index] + rng.Next(32, 224)));
-                        break;
-
-                    case 4:
-                        data[index] = unchecked((byte)(data[index] - rng.Next(32, 224)));
-                        break;
-
-                    default:
-                        data[index] ^= (byte)rng.Next(1, 256);
-                        break;
-                }
-
+                data[index] ^= (byte)rng.Next(1, 256);
                 changed = true;
 
-                // CHAOS/100% gets a second mutation inside every block. This
-                // makes large atlases visibly wrecked instead of subtly noisy.
-                if (intensity >= 100 && blockEnd - blockStart >= 2)
+                if (intensity >= 95 && blockEnd - blockStart >= 2)
                 {
-                    var second = blockStart + rng.Next(blockEnd - blockStart);
-                    if (second == index)
-                        second = blockStart + ((second - blockStart + 1) % (blockEnd - blockStart));
+                    var second = blockStart + rng.Next(
+                        blockEnd - blockStart);
 
                     data[second] ^= (byte)rng.Next(1, 256);
                 }
             }
 
-            return changed;
-        }
+            // Layer additional random damage over the block sweep.
+            for (var i = 0; i < touches; i++)
+            {
+                var index = rng.Next(
+                    startOffset,
+                    endExclusive);
 
-        // Lower intensities use distributed random touches. Increase the
-        // fraction with intensity so 50% is clearly visible while 10% stays
-        // relatively restrained.
-        var touches = (int)Math.Clamp(
-            length * (0.01 + (0.14 * level)),
-            24,
-            400000);
+                data[index] = unchecked(
+                    (byte)(data[index] ^ (byte)rng.Next(1, 256)));
+            }
+
+            return changed || touches > 0;
+        }
 
         for (var i = 0; i < touches; i++)
         {
@@ -984,5 +1071,6 @@ public static class UnityMutationEngine
 
     private readonly record struct Fsb5Info(
         uint Mode,
-        List<Fsb5Sample> Samples);
+        List<Fsb5Sample> Samples,
+        int End);
 }
