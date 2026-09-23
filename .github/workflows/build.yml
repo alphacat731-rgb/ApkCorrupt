@@ -39,13 +39,20 @@ jobs:
           # .NET 9/10 Android normally stores managed assemblies in the ABI-specific
           # assembly store under lib/, rather than the older assemblies/ directory.
           # Accept both layouts so the check matches the actual APK format.
-          if ! unzip -l "$apk" | grep -qE '(^|/)(assemblies/|lib/[^/]+/(libassembly-store\.so|libassemblies\.[^/]+\.blob\.so))'; then
+          unzip -Z1 "$apk" > apk-entries.txt
+
+          # Read the ZIP listing from a file instead of piping unzip into grep -q.
+          # With pipefail enabled, grep -q can close the pipe early and make unzip
+          # exit with SIGPIPE, which incorrectly turns a successful match into a CI failure.
+          if ! grep -qE '(^|/)(assemblies/|lib/[^/]+/(libassembly-store\.so|libassemblies\.[^/]+\.blob\.so))' apk-entries.txt; then
             echo "ERROR: Release APK does not contain an embedded managed assembly store."
             echo "The APK must be self-contained so it can be installed and launched without Fast Deployment."
-            echo "APK contents matching managed assemblies:"
-            unzip -l "$apk" | grep -E '(^|/)(assemblies/|lib/)' | head -n 40 || true
+            echo "APK entries under lib/:"
+            grep -E '(^|/)lib/' apk-entries.txt | head -n 40 || true
             exit 1
           fi
+
+          echo "Embedded managed assembly store detected."
 
           cp "$apk" artifacts/ApkCorrupt.apk
 
