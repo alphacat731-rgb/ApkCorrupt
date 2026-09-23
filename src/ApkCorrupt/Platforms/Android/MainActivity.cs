@@ -63,7 +63,7 @@ public sealed class MainActivity : Activity
         _root.SetBackgroundColor(AndroidColor.ParseColor("#0B0A10"));
 
         var scroll = new AndroidScrollView(this);
-        scroll.SetFillViewport(true);
+        scroll.FillViewport = true;
 
         var content = new LinearLayout(this)
         {
@@ -216,7 +216,7 @@ public sealed class MainActivity : Activity
         };
         _seed.SetTextColor(AndroidColor.ParseColor("#F6F2FF"));
         _seed.SetHintTextColor(AndroidColor.ParseColor("#7F778C"));
-        _seed.SetHint("8 digit seed");
+        _seed.Hint = "8 digit seed";
         card.AddView(_seed, new LinearLayout.LayoutParams(-1, Dp(52))
         {
             TopMargin = Dp(10)
