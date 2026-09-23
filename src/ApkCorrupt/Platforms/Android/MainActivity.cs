@@ -244,7 +244,7 @@ public sealed class MainActivity : Activity
             TopMargin = Dp(10)
         });
 
-        _stats = Text("Textures 0 · Audio 0 · Files 0", 12, "#A8A1B6");
+        _stats = Text("Tex 0 · Mat 0 · Text 0 · Mesh 0 · Audio 0", 12, "#A8A1B6");
         card.AddView(_stats);
 
         return card;
@@ -393,7 +393,7 @@ public sealed class MainActivity : Activity
                 RunOnUiThread(() =>
                 {
                     _status.Text = p.Message;
-                    _stats.Text = $"Textures {p.TexturesChanged} · Audio {p.AudioChanged} · Files {p.FilesChanged}";
+                    _stats.Text = $"Tex {p.TexturesChanged} · Mat {p.MaterialsChanged} · Text {p.TextAssetsChanged} · Mesh {p.MeshesChanged} · Audio {p.AudioChanged}";
                 });
             });
 
@@ -405,7 +405,7 @@ public sealed class MainActivity : Activity
 
             _lastOutputPath = result.OutputPath;
             _status.Text = $"Done. {SystemPath.GetFileName(result.OutputPath)}";
-            _stats.Text = $"Textures {result.TexturesChanged} · Audio {result.AudioChanged} · Files {result.FilesChanged}";
+            _stats.Text = $"Tex {result.TexturesChanged} · Mat {result.MaterialsChanged} · Text {result.TextAssetsChanged} · Mesh {result.MeshesChanged} · Audio {result.AudioChanged} · Files {result.FilesChanged}";
             _openLast.Visibility = ViewStates.Visible;
 
             new AlertDialog.Builder(this)
