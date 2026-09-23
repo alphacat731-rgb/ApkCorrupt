@@ -12,8 +12,7 @@ public static class ApkCorruptor
     private static readonly HashSet<string> UnityLooseExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg",
-        ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff",
-        ".resource", ".ress"
+        ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff"
     };
 
     private static bool IsSignatureEntry(string name)
@@ -233,9 +232,7 @@ public static class ApkCorruptor
             || ext.Equals(".mp3", StringComparison.OrdinalIgnoreCase)
             || ext.Equals(".m4a", StringComparison.OrdinalIgnoreCase)
             || ext.Equals(".aif", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".aiff", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".resource", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".ress", StringComparison.OrdinalIgnoreCase);
+            || ext.Equals(".aiff", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsAudio(string name)
