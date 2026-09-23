@@ -1,6 +1,8 @@
 using Android.App;
 using Android.Content;
 using Android.Graphics;
+using AndroidColor = Android.Graphics.Color;
+using AndroidScrollView = Android.Widget.ScrollView;
 using Android.OS;
 using Android.Provider;
 using Android.Views;
@@ -9,6 +11,7 @@ using AndroidView = Android.Views.View;
 using AndroidButton = Android.Widget.Button;
 using AndroidSwitch = Android.Widget.Switch;
 using ApkCorrupt.Core;
+using SystemPath = System.IO.Path;
 
 namespace ApkCorrupt;
 
@@ -57,9 +60,9 @@ public sealed class MainActivity : Activity
         {
             Orientation = Orientation.Vertical
         };
-        _root.SetBackgroundColor(Color.ParseColor("#0B0A10"));
+        _root.SetBackgroundColor(AndroidColor.ParseColor("#0B0A10"));
 
-        var scroll = new ScrollView(this);
+        var scroll = new AndroidScrollView(this);
         scroll.SetFillViewport(true);
 
         var content = new LinearLayout(this)
@@ -83,7 +86,7 @@ public sealed class MainActivity : Activity
         _corrupt = Button("CORRUPT APK");
         _corrupt.SetTextColor(Color.White);
         _corrupt.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 16);
-        _corrupt.SetBackgroundColor(Color.ParseColor("#A96BFF"));
+        _corrupt.SetBackgroundColor(AndroidColor.ParseColor("#A96BFF"));
         _corrupt.Click += async (_, _) => await CorruptClickedAsync();
         content.AddView(_corrupt, new LinearLayout.LayoutParams(-1, Dp(58))
         {
@@ -93,7 +96,7 @@ public sealed class MainActivity : Activity
         _openLast = Button("OPEN LAST APK");
         _openLast.Visibility = ViewStates.Gone;
         _openLast.SetTextColor(Color.White);
-        _openLast.SetBackgroundColor(Color.ParseColor("#34204A"));
+        _openLast.SetBackgroundColor(AndroidColor.ParseColor("#34204A"));
         _openLast.Click += (_, _) => OpenLast();
         content.AddView(_openLast, new LinearLayout.LayoutParams(-1, Dp(52))
         {
@@ -129,7 +132,7 @@ public sealed class MainActivity : Activity
 
         var pick = Button("PICK APK");
         pick.SetTextColor(Color.White);
-        pick.SetBackgroundColor(Color.ParseColor("#1D1A29"));
+        pick.SetBackgroundColor(AndroidColor.ParseColor("#1D1A29"));
         pick.Click += (_, _) => PickApk();
         card.AddView(pick, new LinearLayout.LayoutParams(-1, Dp(48))
         {
@@ -211,8 +214,8 @@ public sealed class MainActivity : Activity
             InputType = global::Android.Text.InputTypes.ClassNumber
                 | global::Android.Text.InputTypes.NumberFlagSigned
         };
-        _seed.SetTextColor(Color.ParseColor("#F6F2FF"));
-        _seed.SetHintTextColor(Color.ParseColor("#7F778C"));
+        _seed.SetTextColor(AndroidColor.ParseColor("#F6F2FF"));
+        _seed.SetHintTextColor(AndroidColor.ParseColor("#7F778C"));
         _seed.SetHint("8 digit seed");
         card.AddView(_seed, new LinearLayout.LayoutParams(-1, Dp(52))
         {
@@ -221,7 +224,7 @@ public sealed class MainActivity : Activity
 
         var randomize = Button("RANDOMIZE SEED");
         randomize.SetTextColor(Color.White);
-        randomize.SetBackgroundColor(Color.ParseColor("#1D1A29"));
+        randomize.SetBackgroundColor(AndroidColor.ParseColor("#1D1A29"));
         randomize.Click += (_, _) => _seed.Text = Random.Shared.Next(10000000, 99999999).ToString();
         card.AddView(randomize);
 
@@ -254,7 +257,7 @@ public sealed class MainActivity : Activity
             Orientation = Orientation.Vertical
         };
         card.SetPadding(Dp(16), Dp(16), Dp(16), Dp(16));
-        card.SetBackgroundColor(Color.ParseColor("#15131E"));
+        card.SetBackgroundColor(AndroidColor.ParseColor("#15131E"));
         card.LayoutParameters = new LinearLayout.LayoutParams(-1, -2)
         {
             BottomMargin = Dp(14)
@@ -265,9 +268,9 @@ public sealed class MainActivity : Activity
     private void AddIntensityPreset(LinearLayout row, string label, int value)
     {
         var button = Button(label);
-        button.SetTextColor(Color.ParseColor("#D8D0E5"));
+        button.SetTextColor(AndroidColor.ParseColor("#D8D0E5"));
         button.SetTextSize(global::Android.Util.ComplexUnitType.Sp, 11);
-        button.SetBackgroundColor(Color.ParseColor("#1D1A29"));
+        button.SetBackgroundColor(AndroidColor.ParseColor("#1D1A29"));
         button.Click += (_, _) => SetIntensity(value);
 
         row.AddView(button, new LinearLayout.LayoutParams(0, Dp(42), 1f)
@@ -290,7 +293,7 @@ public sealed class MainActivity : Activity
             Text = label,
             Checked = checkedState
         };
-        sw.SetTextColor(Color.ParseColor("#F6F2FF"));
+        sw.SetTextColor(AndroidColor.ParseColor("#F6F2FF"));
         return sw;
     }
 
@@ -301,7 +304,7 @@ public sealed class MainActivity : Activity
             Text = value
         };
         tv.SetTextSize(global::Android.Util.ComplexUnitType.Sp, size);
-        tv.SetTextColor(Color.ParseColor(color));
+        tv.SetTextColor(AndroidColor.ParseColor(color));
         return tv;
     }
 
@@ -310,7 +313,6 @@ public sealed class MainActivity : Activity
         var button = new AndroidButton(this)
         {
             Text = value,
-            AllCaps = false
         };
         return button;
     }
@@ -337,7 +339,7 @@ public sealed class MainActivity : Activity
         {
             var uri = data.Data;
             var name = uri.LastPathSegment?.Split('/').LastOrDefault();
-            var localPath = Path.Combine(CacheDir!.AbsolutePath, $"source-{Guid.NewGuid():N}.apk");
+            var localPath = SystemPath.Combine(CacheDir!.AbsolutePath, $"source-{Guid.NewGuid():N}.apk");
 
             using var input = ContentResolver!.OpenInputStream(uri!);
             await using var output = File.Create(localPath);
@@ -402,14 +404,14 @@ public sealed class MainActivity : Activity
                 CancellationToken.None);
 
             _lastOutputPath = result.OutputPath;
-            _status.Text = $"Done. {Path.GetFileName(result.OutputPath)}";
+            _status.Text = $"Done. {SystemPath.GetFileName(result.OutputPath)}";
             _stats.Text = $"Textures {result.TexturesChanged} · Audio {result.AudioChanged} · Files {result.FilesChanged}";
             _openLast.Visibility = ViewStates.Visible;
 
             new AlertDialog.Builder(this)
                 .SetTitle("APK ready")
-                .SetMessage($"Saved to Downloads as {Path.GetFileName(result.OutputPath)}")
-                .SetPositiveButton("Nice", null)
+                .SetMessage($"Saved to Downloads as {SystemPath.GetFileName(result.OutputPath)}")
+                .SetPositiveButton("Nice", (s, e) => { })
                 .Show();
         }
         catch (Exception ex)
