@@ -9,10 +9,9 @@ public partial class App : Application
 
     protected override Window CreateWindow(IActivationState? activationState)
     {
-        return new Window(new NavigationPage(new MainPage())
-        {
-            BarBackgroundColor = Color.FromArgb("#0B0A10"),
-            BarTextColor = Colors.White
-        });
+        // The app only has one screen right now. Avoid wrapping it in a
+        // NavigationPage: on Android/.NET 10, NavigationPage adds another
+        // layer to the startup view lifecycle that we don't need.
+        return new Window(new MainPage());
     }
 }
