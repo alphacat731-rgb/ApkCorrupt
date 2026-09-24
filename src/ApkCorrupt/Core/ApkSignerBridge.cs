@@ -46,11 +46,10 @@ public static class ApkSignerBridge
         string certPath,
         CancellationToken cancellationToken)
     {
-        // JNI local references belong to the Android thread's local reference
-        // table. Do not move this call to Task.Run: the worker thread has a
-        // different JNIEnv. Also, FindClass returns a local/global-managed
-        // reference that the Xamarin runtime owns here; deleting it manually
-        // can trigger "Attempt to delete global reference as local JNI reference".
+        // JNI references are thread-local. Run the bridge on the current
+        // Android-attached thread instead of Task.Run, and let the binding own
+        // the FindClass local reference. Calling DeleteLocalRef on the value
+        // returned by FindClass was the source of the SIGABRT seen on device.
         cancellationToken.ThrowIfCancellationRequested();
 
         var clazz = JNIEnv.FindClass(JavaClass);
@@ -80,4 +79,3 @@ public static class ApkSignerBridge
 
         return Task.CompletedTask;
     }
-}
