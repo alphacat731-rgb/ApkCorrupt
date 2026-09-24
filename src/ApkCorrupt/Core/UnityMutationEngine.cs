@@ -451,6 +451,8 @@ public static class UnityMutationEngine
         var meshes = 0;
         var videos = 0;
         var lights = 0;
+        var videos = 0;
+        var lights = 0;
 
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Texture2D))
         {
@@ -534,7 +536,7 @@ public static class UnityMutationEngine
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!ShouldHit(options.Intensity, rng))
+            if (!options.Textures)
                 continue;
 
             try
@@ -609,7 +611,7 @@ public static class UnityMutationEngine
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!options.Audio || !ShouldHit(options.Intensity, rng))
+            if (!options.Audio)
                 continue;
 
             try
@@ -644,7 +646,7 @@ public static class UnityMutationEngine
             }
         }
 
-        if (textures == 0 && audio == 0 && materials == 0 && textAssets == 0 && meshes == 0)
+        if (textures == 0 && audio == 0 && materials == 0 && textAssets == 0 && meshes == 0 && videos == 0 && lights == 0)
             return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
 
         await Task.Run(() =>
@@ -680,6 +682,8 @@ public static class UnityMutationEngine
         var materials = 0;
         var textAssets = 0;
         var meshes = 0;
+        var videos = 0;
+        var lights = 0;
 
         for (var i = 0; i < bundle.file.BlockAndDirInfo.DirectoryInfos.Count; i++)
         {
@@ -703,7 +707,7 @@ public static class UnityMutationEngine
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (!options.Textures || !ShouldHit(options.Intensity, rng))
+                if (!options.Textures)
                     continue;
 
                 try
@@ -856,7 +860,7 @@ public static class UnityMutationEngine
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (!options.Audio || !ShouldHit(options.Intensity, rng))
+                if (!options.Audio)
                     continue;
 
                 try
