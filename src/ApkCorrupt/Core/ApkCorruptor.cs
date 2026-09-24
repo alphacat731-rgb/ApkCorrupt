@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using Android.Graphics;
+using Path = System.IO.Path;
 
 namespace ApkCorrupt.Core;
 
