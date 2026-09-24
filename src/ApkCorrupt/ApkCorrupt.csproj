@@ -12,9 +12,23 @@
     <ApplicationId>com.alphacat.apkcorrupt</ApplicationId>
     <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
-    <SupportedOSPlatformVersion>29.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion>24.0</SupportedOSPlatformVersion>
     <TargetSdkVersion>36</TargetSdkVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
+
+    <!-- .NET 10 enables marshal-method generation by default; disabling it
+         avoids known startup crashes/hangs on affected Android devices. -->
+    <AndroidEnableMarshalMethods>false</AndroidEnableMarshalMethods>
+
+    <!-- CI artifacts are installed directly, not through Fast Deployment.
+         Keep all managed assemblies inside the APK. -->
+    <AndroidUseFastDeployment>false</AndroidUseFastDeployment>
+    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+    <AndroidUseSharedRuntime>false</AndroidUseSharedRuntime>
+
+    <!-- Prefer a reliable standalone APK while we stabilize the app. -->
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
   <ItemGroup>

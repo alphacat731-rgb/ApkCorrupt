@@ -6,11 +6,20 @@ namespace ApkCorrupt.Core;
 
 public static class UnityMutationEngine
 {
+    private const uint Fsb5Vorbis = 15;
+    private const AssetClassID VideoClipClassId = (AssetClassID)329;
+    private const AssetClassID LightClassId = (AssetClassID)108;
+
     public sealed record MutationResult(
         bool Changed,
         string OutputPath,
         int TexturesChanged,
-        int AudioChanged);
+        int AudioChanged,
+        int MaterialsChanged,
+        int TextAssetsChanged,
+        int MeshesChanged,
+        int VideosChanged = 0,
+        int LightsChanged = 0);
 
     public static async Task<MutationResult> TryMutateAsync(
         string inputPath,
@@ -19,6 +28,15 @@ public static class UnityMutationEngine
         CancellationToken cancellationToken)
     {
         var outputPath = inputPath + ".mutated";
+
+        if (IsFsb5(inputPath))
+        {
+            if (!options.Audio)
+                return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
+
+            return await MutateFsb5Async(
+                inputPath, outputPath, options, rng, cancellationToken);
+        }
 
         if (IsStandaloneAssets(inputPath))
         {
@@ -42,7 +60,22 @@ public static class UnityMutationEngine
             }
         }
 
-        return new MutationResult(false, inputPath, 0, 0);
+        return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
+    }
+
+    private static bool IsFsb5(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            Span<byte> magic = stackalloc byte[4];
+            return stream.Read(magic) == 4
+                && magic.SequenceEqual("FSB5"u8);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool IsStandaloneAssets(string path)
@@ -78,6 +111,329 @@ public static class UnityMutationEngine
         }
     }
 
+    private static async Task<MutationResult> MutateFsb5Async(
+        string inputPath,
+        string outputPath,
+        CorruptionOptions options,
+        Random rng,
+        CancellationToken cancellationToken)
+    {
+        var bytes = await File.ReadAllBytesAsync(inputPath, cancellationToken);
+
+        var position = 0;
+        var sampleCount = 0;
+        var containerCount = 0;
+        var changed = false;
+
+        // Unity's .resource files can contain many FSB5 containers concatenated
+        // back-to-back. A previous implementation only touched the first one,
+        // which is why audio often appeared completely unchanged.
+        while (position + 0x3C <= bytes.Length
+               && bytes.AsSpan(position, 4).SequenceEqual("FSB5"u8))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!TryParseFsb5Container(bytes, position, out var fsb))
+                break;
+
+            foreach (var sample in fsb.Samples)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (sample.End <= sample.Start)
+                    continue;
+
+                if (fsb.Mode == Fsb5Vorbis)
+                {
+                    if (MutateFsb5VorbisSample(
+                        bytes,
+                        sample.Start,
+                        sample.End,
+                        options.Intensity,
+                        rng))
+                    {
+                        sampleCount++;
+                        changed = true;
+                    }
+                }
+                else
+                {
+                    if (MutateEncodedRegion(
+                        bytes,
+                        sample.Start,
+                        sample.End - sample.Start,
+                        options.Intensity,
+                        rng,
+                        preservePrefix: 16))
+                    {
+                        sampleCount++;
+                        changed = true;
+                    }
+                }
+            }
+
+            containerCount++;
+            position = fsb.End;
+        }
+
+        if (!changed)
+            return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
+
+        await File.WriteAllBytesAsync(outputPath, bytes, cancellationToken);
+
+        return new MutationResult(
+            true,
+            outputPath,
+            0,
+            sampleCount,
+            0,
+            0,
+            0);
+    }
+
+    private static bool TryParseFsb5Container(
+        byte[] bytes,
+        int containerStart,
+        out Fsb5Info fsb)
+    {
+        fsb = default;
+
+        if (containerStart < 0
+            || containerStart + 0x3C > bytes.Length
+            || !bytes.AsSpan(containerStart, 4).SequenceEqual("FSB5"u8))
+            return false;
+
+        try
+        {
+            var version = ReadUInt32LE(bytes, containerStart + 4);
+            if (version is not (0u or 1u))
+                return false;
+
+            var numSamples = ReadUInt32LE(bytes, containerStart + 8);
+            var sampleHeadersSize = ReadUInt32LE(bytes, containerStart + 12);
+            var nameTableSize = ReadUInt32LE(bytes, containerStart + 16);
+            var dataSize = ReadUInt32LE(bytes, containerStart + 20);
+            var mode = ReadUInt32LE(bytes, containerStart + 24);
+
+            if (numSamples == 0 || numSamples > 100000)
+                return false;
+
+            var headerSize = version == 0 ? 0x40 : 0x3C;
+
+            var sampleHeadersStart = checked(
+                containerStart + headerSize);
+
+            var sampleHeadersEnd = checked(
+                (long)sampleHeadersStart + sampleHeadersSize);
+
+            if (sampleHeadersEnd > bytes.Length)
+                return false;
+
+            var dataStart = checked(
+                sampleHeadersEnd + nameTableSize);
+
+            var dataEnd = checked(
+                dataStart + dataSize);
+
+            if (dataEnd > bytes.Length)
+                return false;
+
+            var sampleHeaderPos = sampleHeadersStart;
+            var offsets = new List<ulong>(
+                checked((int)numSamples));
+
+            for (var i = 0u; i < numSamples; i++)
+            {
+                if ((long)sampleHeaderPos + 8 > sampleHeadersEnd)
+                    return false;
+
+                var raw = ReadUInt64LE(bytes, sampleHeaderPos);
+                sampleHeaderPos += 8;
+
+                // FSB5 sample header:
+                // bit 0 = more metadata chunks
+                // bits 1..4 = frequency index
+                // bit 5 = stereo flag
+                // bits 6..33 = data offset in 16-byte units
+                // bits 34..63 = decoded sample count
+                var hasChunks = (raw & 1UL) != 0;
+                var dataOffset = ((raw >> 6) & 0x0FFFFFFFUL) * 16UL;
+                offsets.Add(dataOffset);
+
+                while (hasChunks)
+                {
+                    if ((long)sampleHeaderPos + 4 > sampleHeadersEnd)
+                        return false;
+
+                    var chunkHeader = ReadUInt32LE(bytes, sampleHeaderPos);
+                    sampleHeaderPos += 4;
+
+                    hasChunks = (chunkHeader & 1u) != 0;
+                    var chunkSize = (chunkHeader >> 1) & 0x00FFFFFFu;
+
+                    if ((long)sampleHeaderPos + chunkSize > sampleHeadersEnd)
+                        return false;
+
+                    sampleHeaderPos += checked((int)chunkSize);
+                }
+
+                // FSB5 sample headers are padded to 16-byte boundaries.
+                sampleHeaderPos = Align16(
+                    sampleHeaderPos,
+                    sampleHeadersStart);
+
+                if ((long)sampleHeaderPos > sampleHeadersEnd)
+                    return false;
+            }
+
+            var samples = new List<Fsb5Sample>(offsets.Count);
+
+            for (var i = 0; i < offsets.Count; i++)
+            {
+                var startOffset = offsets[i];
+                var endOffset = (ulong)dataSize;
+
+                if (i + 1 < offsets.Count)
+                    endOffset = offsets[i + 1];
+
+                if (startOffset >= (ulong)dataSize
+                    || endOffset > (ulong)dataSize
+                    || endOffset <= startOffset)
+                    continue;
+
+                var start = checked((int)((ulong)dataStart + startOffset));
+                var end = checked((int)((ulong)dataStart + endOffset));
+
+                samples.Add(new Fsb5Sample(start, end));
+            }
+
+            if (samples.Count == 0)
+                return false;
+
+            fsb = new Fsb5Info(
+                mode,
+                samples,
+                checked((int)dataEnd));
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int Align16(
+        int value,
+        int origin)
+    {
+        var relative = value - origin;
+        return origin + ((relative + 15) / 16 * 16);
+    }
+
+    private static bool MutateFsb5VorbisSample(
+        byte[] bytes,
+        int start,
+        int end,
+        int intensity,
+        Random rng)
+    {
+        var ranges = new List<(int Start, int End)>();
+        var pos = start;
+        var packetIndex = 0;
+
+        while (pos + 2 <= end)
+        {
+            var packetSize = ReadUInt16LE(bytes, pos);
+            if (packetSize == 0)
+                break;
+
+            var packetEnd = checked(pos + 2 + packetSize);
+            if (packetEnd > end)
+                break;
+
+            // FSB5 Vorbis stores a one-byte packet flag followed by the Vorbis
+            // payload. Keep packet framing intact and never touch the first
+            // three codec-header packets.
+            var payloadStart = pos + 3;
+            if (packetIndex >= 3 && payloadStart < packetEnd)
+                ranges.Add((payloadStart, packetEnd));
+
+            pos = packetEnd;
+            packetIndex++;
+        }
+
+        if (ranges.Count == 0)
+            return false;
+
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var totalMutable = ranges.Sum(r => (long)r.End - r.Start);
+
+        // This is intentionally not a codec re-encode: FSB5 keeps Vorbis setup
+        // identification in VORBISDATA metadata. Altering the setup/CRC would
+        // risk making the sample unplayable. Instead we apply lossy-looking
+        // packet damage while preserving the FSB packet boundaries.
+        var fraction = 0.006 + (0.026 * level);
+        var touches = (int)Math.Clamp(totalMutable * fraction, 12, 180000);
+
+        for (var i = 0; i < touches; i++)
+        {
+            var range = ranges[rng.Next(ranges.Count)];
+            var index = rng.Next(range.Start, range.End);
+
+            switch (rng.Next(5))
+            {
+                case 0:
+                    // Drop lower bits: a crude low-fidelity / crunchy effect.
+                    bytes[index] &= intensity >= 80 ? (byte)0xC0 : (byte)0xE0;
+                    break;
+
+                case 1:
+                    // Flip a sparse bit for codec grit.
+                    bytes[index] ^= (byte)(1 << rng.Next(8));
+                    break;
+
+                case 2:
+                    bytes[index] = (byte)rng.Next(0, 256);
+                    break;
+
+                case 3:
+                    bytes[index] = unchecked((byte)(bytes[index] + rng.Next(16, 96)));
+                    break;
+
+                default:
+                    bytes[index] = unchecked((byte)(bytes[index] - rng.Next(16, 96)));
+                    break;
+            }
+        }
+
+        // Short bursts create audible crackle without rewriting packet lengths.
+        if (level >= 0.35)
+        {
+            var burstCount = Math.Clamp(ranges.Count / 8, 1, 96);
+
+            for (var i = 0; i < burstCount; i++)
+            {
+                var range = ranges[rng.Next(ranges.Count)];
+                var maxLength = Math.Min(96, Math.Max(6, range.End - range.Start));
+                var length = Math.Min(
+                    maxLength,
+                    6 + rng.Next(Math.Max(1, maxLength - 5)));
+
+                var burstStart = rng.Next(
+                    range.Start,
+                    range.End - length + 1);
+
+                for (var j = 0; j < length; j++)
+                {
+                    bytes[burstStart + j] &= intensity >= 85 ? (byte)0x7F : (byte)0xBF;
+                }
+            }
+        }
+
+        return touches > 0;
+    }
+
     private static async Task<MutationResult> MutateStandaloneAssetsAsync(
         string inputPath,
         string outputPath,
@@ -90,54 +446,31 @@ public static class UnityMutationEngine
 
         var textures = 0;
         var audio = 0;
+        var materials = 0;
+        var textAssets = 0;
+        var meshes = 0;
+        var videos = 0;
+        var lights = 0;
 
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Texture2D))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!options.Textures || !ShouldHit(options.Intensity, rng))
+            if (!options.Textures)
                 continue;
 
             try
             {
-                var baseField = manager.GetBaseField(instance, info);
-                var texture = TextureFile.ReadTextureFile(baseField);
-
-                var data = texture.FillPictureData(instance);
-                if (data is not { Length: > 0 })
-                    continue;
-
-                var decoded = TextureFile.DecodeManagedData(
-                    data,
-                    (TextureFormat)texture.m_TextureFormat,
-                    texture.m_Width,
-                    texture.m_Height,
-                    useBgra: true);
-
-                if (decoded is not { Length: > 0 })
-                    continue;
-
-                CorruptPixels(decoded, texture.m_Width, texture.m_Height, options.Intensity, rng);
-
-                var encoded = TextureFile.EncodeManagedData(
-                    decoded,
-                    TextureFormat.RGBA32,
-                    texture.m_Width,
-                    texture.m_Height,
-                    useBgra: true);
-
-                if (encoded is not { Length: > 0 })
-                    continue;
-
-                texture.SetPictureData(
-                    encoded,
-                    texture.m_Width,
-                    texture.m_Height,
-                    TextureFormat.RGBA32);
-
-                texture.WriteTo(baseField);
-                info.SetNewData(baseField);
-                textures++;
+                if (TryMutateTexture(
+                    manager,
+                    instance,
+                    info,
+                    null,
+                    options.Intensity,
+                    rng))
+                {
+                    textures++;
+                }
             }
             catch
             {
@@ -145,11 +478,140 @@ public static class UnityMutationEngine
             }
         }
 
+
+        foreach (var info in instance.file.GetAssetsOfType(VideoClipClassId))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!options.Textures)
+                continue;
+
+            try
+            {
+                if (TryMutateVideoClip(
+                    manager,
+                    instance,
+                    info,
+                    null,
+                    options.Intensity,
+                    rng))
+                {
+                    videos++;
+                }
+            }
+            catch
+            {
+                // A single video clip must never abort the whole file.
+            }
+        }
+
+        foreach (var info in instance.file.GetAssetsOfType(LightClassId))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!options.Textures)
+                continue;
+
+            try
+            {
+                if (TryMutateLight(
+                    manager,
+                    instance,
+                    info,
+                    options.Intensity,
+                    rng))
+                {
+                    lights++;
+                }
+            }
+            catch
+            {
+                // Best-effort lighting mutation.
+            }
+        }
+
+        foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Material))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!options.Textures)
+                continue;
+
+            try
+            {
+                if (TryMutateMaterial(
+                    manager,
+                    instance,
+                    info,
+                    options.Intensity,
+                    rng))
+                {
+                    materials++;
+                }
+            }
+            catch
+            {
+                // Keep an individual material from aborting the file.
+            }
+        }
+
+        foreach (var info in instance.file.GetAssetsOfType(AssetClassID.TextAsset))
+        {
+            // This audiovisual profile never mutates TextAsset/config content.
+            continue;
+
+            if (!ShouldHit(options.Intensity, rng))
+                continue;
+
+            try
+            {
+                if (TryMutateTextAsset(
+                    manager,
+                    instance,
+                    info,
+                    options.Intensity,
+                    rng))
+                {
+                    textAssets++;
+                }
+            }
+            catch
+            {
+                // Keep an individual text asset from aborting the file.
+            }
+        }
+
+        foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Mesh))
+        {
+            // This audiovisual profile never mutates mesh topology.
+            continue;
+
+            if (!ShouldHit(options.Intensity, rng))
+                continue;
+
+            try
+            {
+                if (TryMutateMesh(
+                    manager,
+                    instance,
+                    info,
+                    options.Intensity,
+                    rng))
+                {
+                    meshes++;
+                }
+            }
+            catch
+            {
+                // Keep mesh corruption best-effort.
+            }
+        }
+
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.AudioClip))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!options.Audio || !ShouldHit(options.Intensity, rng))
+            if (!options.Audio)
                 continue;
 
             try
@@ -165,7 +627,15 @@ public static class UnityMutationEngine
                 if (bytes.Length <= 32)
                     continue;
 
-                MutateEncodedRegion(bytes, options.Intensity, rng);
+                if (!MutateEncodedRegion(
+                    bytes,
+                    0,
+                    bytes.Length,
+                    options.Intensity,
+                    rng,
+                    preservePrefix: 32))
+                    continue;
+
                 audioData.AsByteArray = bytes;
                 info.SetNewData(baseField);
                 audio++;
@@ -176,8 +646,8 @@ public static class UnityMutationEngine
             }
         }
 
-        if (textures == 0 && audio == 0)
-            return new MutationResult(false, inputPath, 0, 0);
+        if (textures == 0 && audio == 0 && materials == 0 && textAssets == 0 && meshes == 0 && videos == 0 && lights == 0)
+            return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
 
         await Task.Run(() =>
         {
@@ -185,7 +655,16 @@ public static class UnityMutationEngine
             instance.file.Write(writer);
         }, cancellationToken);
 
-        return new MutationResult(true, outputPath, textures, audio);
+        return new MutationResult(
+            true,
+            outputPath,
+            textures,
+            audio,
+            materials,
+            textAssets,
+            meshes,
+            videos,
+            lights);
     }
 
     private static async Task<MutationResult> MutateBundleAsync(
@@ -200,6 +679,11 @@ public static class UnityMutationEngine
 
         var textures = 0;
         var audio = 0;
+        var materials = 0;
+        var textAssets = 0;
+        var meshes = 0;
+        var videos = 0;
+        var lights = 0;
 
         for (var i = 0; i < bundle.file.BlockAndDirInfo.DirectoryInfos.Count; i++)
         {
@@ -223,49 +707,21 @@ public static class UnityMutationEngine
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (!options.Textures || !ShouldHit(options.Intensity, rng))
+                if (!options.Textures)
                     continue;
 
                 try
                 {
-                    var baseField = manager.GetBaseField(assets, info);
-                    var texture = TextureFile.ReadTextureFile(baseField);
-                    var data = texture.FillPictureData(assets);
-
-                    if (data is not { Length: > 0 })
-                        continue;
-
-                    var decoded = TextureFile.DecodeManagedData(
-                        data,
-                        (TextureFormat)texture.m_TextureFormat,
-                        texture.m_Width,
-                        texture.m_Height,
-                        useBgra: true);
-
-                    if (decoded is not { Length: > 0 })
-                        continue;
-
-                    CorruptPixels(decoded, texture.m_Width, texture.m_Height, options.Intensity, rng);
-
-                    var encoded = TextureFile.EncodeManagedData(
-                        decoded,
-                        TextureFormat.RGBA32,
-                        texture.m_Width,
-                        texture.m_Height,
-                        useBgra: true);
-
-                    if (encoded is not { Length: > 0 })
-                        continue;
-
-                    texture.SetPictureData(
-                        encoded,
-                        texture.m_Width,
-                        texture.m_Height,
-                        TextureFormat.RGBA32);
-
-                    texture.WriteTo(baseField);
-                    info.SetNewData(baseField);
-                    textures++;
+                    if (TryMutateTexture(
+                        manager,
+                        assets,
+                        info,
+                        bundle.file,
+                        options.Intensity,
+                        rng))
+                    {
+                        textures++;
+                    }
                 }
                 catch
                 {
@@ -273,11 +729,140 @@ public static class UnityMutationEngine
                 }
             }
 
+
+            foreach (var info in assets.file.GetAssetsOfType(VideoClipClassId))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!options.Textures)
+                    continue;
+
+                try
+                {
+                    if (TryMutateVideoClip(
+                        manager,
+                        assets,
+                        info,
+                        bundle.file,
+                        options.Intensity,
+                        rng))
+                    {
+                        videos++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort video mutation.
+                }
+            }
+
+            foreach (var info in assets.file.GetAssetsOfType(LightClassId))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!options.Textures)
+                    continue;
+
+                try
+                {
+                    if (TryMutateLight(
+                        manager,
+                        assets,
+                        info,
+                        options.Intensity,
+                        rng))
+                    {
+                        lights++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort lighting mutation.
+                }
+            }
+
+            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Material))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!ShouldHit(options.Intensity, rng))
+                    continue;
+
+                try
+                {
+                    if (TryMutateMaterial(
+                        manager,
+                        assets,
+                        info,
+                        options.Intensity,
+                        rng))
+                    {
+                        materials++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort material mutation.
+                }
+            }
+
+            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.TextAsset))
+            {
+                // This audiovisual profile never mutates TextAsset/config content.
+                continue;
+
+                if (!ShouldHit(options.Intensity, rng))
+                    continue;
+
+                try
+                {
+                    if (TryMutateTextAsset(
+                        manager,
+                        assets,
+                        info,
+                        options.Intensity,
+                        rng))
+                    {
+                        textAssets++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort text mutation.
+                }
+            }
+
+            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Mesh))
+            {
+                // This audiovisual profile never mutates mesh topology.
+                continue;
+
+                if (!ShouldHit(options.Intensity, rng))
+                    continue;
+
+                try
+                {
+                    if (TryMutateMesh(
+                        manager,
+                        assets,
+                        info,
+                        options.Intensity,
+                        rng))
+                    {
+                        meshes++;
+                    }
+                }
+                catch
+                {
+                    // Best-effort mesh mutation.
+                }
+            }
+
             foreach (var info in assets.file.GetAssetsOfType(AssetClassID.AudioClip))
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (!options.Audio || !ShouldHit(options.Intensity, rng))
+                if (!options.Audio)
                     continue;
 
                 try
@@ -289,9 +874,15 @@ public static class UnityMutationEngine
                         && audioData.TemplateField.ValueType == AssetValueType.ByteArray)
                     {
                         var bytes = audioData.AsByteArray;
-                        if (bytes.Length > 32)
+                        if (bytes.Length > 32
+                            && MutateEncodedRegion(
+                                bytes,
+                                0,
+                                bytes.Length,
+                                options.Intensity,
+                                rng,
+                                preservePrefix: 32))
                         {
-                            MutateEncodedRegion(bytes, options.Intensity, rng);
                             audioData.AsByteArray = bytes;
                             info.SetNewData(baseField);
                             audio++;
@@ -299,19 +890,14 @@ public static class UnityMutationEngine
                         }
                     }
 
-                    // Many Unity AudioClips keep the encoded bytes in a .resS/.resource
-                    // entry instead of m_AudioData. We update that referenced range in-place
-                    // without changing its size.
-                    if (!TryMutateExternalAudio(
+                    if (TryMutateExternalAudio(
                         bundle.file,
                         baseField,
                         options.Intensity,
                         rng))
                     {
-                        continue;
+                        audio++;
                     }
-
-                    audio++;
                 }
                 catch
                 {
@@ -319,15 +905,19 @@ public static class UnityMutationEngine
                 }
             }
 
-            // AT3 uses a content replacer attached directly to the bundle directory.
             dirInfo.SetNewData(assets.file);
         }
 
-        // External resource entries are handled in-place through their directory replacer.
-        // TryMutateExternalAudio stores mutations directly on those entries.
-        var anyBundleChanges = textures > 0 || audio > 0;
+        var anyBundleChanges =
+            textures > 0
+            || audio > 0
+            || materials > 0
+            || textAssets > 0
+            || meshes > 0
+            || videos > 0
+            || lights > 0;
         if (!anyBundleChanges)
-            return new MutationResult(false, inputPath, 0, 0);
+            return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
 
         await Task.Run(() =>
         {
@@ -335,7 +925,823 @@ public static class UnityMutationEngine
             bundle.file.Write(writer);
         }, cancellationToken);
 
-        return new MutationResult(true, outputPath, textures, audio);
+        return new MutationResult(
+            true,
+            outputPath,
+            textures,
+            audio,
+            materials,
+            textAssets,
+            meshes,
+            videos,
+            lights);
+    }
+
+    private static bool TryMutateTexture(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        AssetBundleFile? bundle,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var texture = TextureFile.ReadTextureFile(baseField);
+
+        var hasExternalStream =
+            !string.IsNullOrWhiteSpace(texture.m_StreamData.path)
+            && texture.m_StreamData.size != 0;
+
+        // When the image bytes live in a bundle-side .resS/resource entry,
+        // mutate that exact byte range and leave Texture2D's stream reference
+        // untouched. This is the important path for textures that previously
+        // made the counter stall at a small number.
+        if (hasExternalStream && bundle is not null)
+        {
+            if (TryMutateExternalTexture(
+                bundle,
+                texture.m_StreamData.path,
+                texture.m_StreamData.offset,
+                texture.m_StreamData.size,
+                intensity,
+                rng))
+            {
+                return true;
+            }
+        }
+
+        var data = texture.FillPictureData(assets);
+        if (data is not { Length: > 0 })
+            return false;
+
+        // Do not decode/re-encode here. Directly corrupting the texture's
+        // existing encoded format avoids losing ETC/ASTC/BC/crunched formats
+        // and avoids turning a compressed texture into a different format.
+        if (!MutateTextureEncodedData(
+            data,
+            (TextureFormat)texture.m_TextureFormat,
+            intensity,
+            rng))
+            return false;
+
+        texture.SetPictureData(
+            data,
+            texture.m_Width,
+            texture.m_Height);
+
+        texture.WriteTo(baseField);
+        info.SetNewData(baseField);
+
+        return true;
+    }
+
+    private static bool TryMutateExternalTexture(
+        AssetBundleFile bundle,
+        string sourcePath,
+        ulong offset,
+        uint size,
+        int intensity,
+        Random rng)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath)
+            || size == 0
+            || offset > int.MaxValue)
+            return false;
+
+        var normalized = sourcePath.Replace('\\', '/');
+        var name = Path.GetFileName(normalized);
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        var resourceIndex = ResolveResourceIndex(bundle, name);
+        if (resourceIndex < 0)
+            return false;
+
+        var resourceInfo = bundle.BlockAndDirInfo.DirectoryInfos[resourceIndex];
+        bundle.GetFileRange(resourceIndex, out var fileOffset, out var fileLength);
+
+        if (fileLength <= 0 || fileLength > int.MaxValue)
+            return false;
+
+        bundle.DataReader.Position = fileOffset;
+        var bytes = bundle.DataReader.ReadBytes((int)fileLength);
+
+        if (offset >= (ulong)bytes.Length)
+            return false;
+
+        var available = bytes.Length - (long)offset;
+        var targetSize = (int)Math.Min(size, (ulong)available);
+
+        if (targetSize < 8)
+            return false;
+
+        if (!MutateTextureEncodedData(
+            bytes,
+            (TextureFormat)TextureFormat.RGBA32,
+            intensity,
+            rng,
+            startOffset: (int)offset,
+            length: targetSize))
+            return false;
+
+        resourceInfo.SetNewData(bytes);
+        return true;
+    }
+
+    private static bool MutateTextureEncodedData(
+        byte[] data,
+        TextureFormat format,
+        int intensity,
+        Random rng,
+        int startOffset = 0,
+        int length = -1)
+    {
+        if (data.Length < 8)
+            return false;
+
+        startOffset = Math.Clamp(startOffset, 0, data.Length - 1);
+
+        if (length < 0)
+            length = data.Length - startOffset;
+
+        length = Math.Clamp(length, 1, data.Length - startOffset);
+        if (length < 8)
+            return false;
+
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var endExclusive = startOffset + length;
+        var blockSize = GetTextureBlockSize(format);
+
+        // Corrupt a substantial portion of the encoded data at high intensity.
+        // The format/header metadata is untouched, but enough block bytes are
+        // changed to produce obvious texture artifacts instead of a visually
+        // identical texture with a few hidden bit errors.
+        var fraction = intensity >= 90
+            ? 0.12 + (0.23 * level)
+            : 0.01 + (0.14 * level);
+
+        var touches = (int)Math.Clamp(
+            length * fraction,
+            24,
+            700000);
+
+        if (blockSize > 0 && intensity >= 65)
+        {
+            var stride = intensity >= 90
+                ? Math.Max(1, blockSize / 2)
+                : blockSize;
+
+            var changed = false;
+
+            for (var blockStart = startOffset;
+                 blockStart < endExclusive;
+                 blockStart += stride)
+            {
+                var blockEnd = Math.Min(
+                    blockStart + blockSize,
+                    endExclusive);
+
+                if (blockEnd <= blockStart)
+                    continue;
+
+                var index = blockStart + rng.Next(
+                    blockEnd - blockStart);
+
+                data[index] ^= (byte)rng.Next(1, 256);
+                changed = true;
+
+                if (intensity >= 95 && blockEnd - blockStart >= 2)
+                {
+                    var second = blockStart + rng.Next(
+                        blockEnd - blockStart);
+
+                    data[second] ^= (byte)rng.Next(1, 256);
+                }
+            }
+
+            // Layer additional random damage over the block sweep.
+            for (var i = 0; i < touches; i++)
+            {
+                var index = rng.Next(
+                    startOffset,
+                    endExclusive);
+
+                data[index] = unchecked(
+                    (byte)(data[index] ^ (byte)rng.Next(1, 256)));
+            }
+
+            return changed || touches > 0;
+        }
+
+        for (var i = 0; i < touches; i++)
+        {
+            var index = rng.Next(startOffset, endExclusive);
+
+            switch (rng.Next(5))
+            {
+                case 0:
+                    data[index] ^= (byte)(1 << rng.Next(8));
+                    break;
+
+                case 1:
+                    data[index] ^= (byte)rng.Next(1, 256);
+                    break;
+
+                case 2:
+                    data[index] = (byte)rng.Next(0, 256);
+                    break;
+
+                case 3:
+                    data[index] = unchecked(
+                        (byte)(data[index] + rng.Next(17, 180)));
+                    break;
+
+                default:
+                    data[index] = unchecked(
+                        (byte)(data[index] - rng.Next(17, 180)));
+                    break;
+            }
+        }
+
+        return touches > 0;
+    }
+
+    private static int GetTextureBlockSize(TextureFormat format)
+    {
+        return format switch
+        {
+            TextureFormat.DXT1
+                or TextureFormat.BC4
+                or TextureFormat.BC5 => 8,
+
+            TextureFormat.DXT3
+                or TextureFormat.DXT5
+                or TextureFormat.BC6H
+                or TextureFormat.BC7
+                or TextureFormat.ETC_RGB4
+                or TextureFormat.ETC2_RGB4
+                or TextureFormat.ETC2_RGBA1
+                or TextureFormat.ETC2_RGBA8
+                or TextureFormat.EAC_R
+                or TextureFormat.EAC_R_SIGNED
+                or TextureFormat.EAC_RG
+                or TextureFormat.EAC_RG_SIGNED
+                or TextureFormat.ASTC_RGB_4x4
+                or TextureFormat.ASTC_RGBA_4x4
+                or TextureFormat.ASTC_RGB_5x5
+                or TextureFormat.ASTC_RGBA_5x5
+                or TextureFormat.ASTC_RGB_6x6
+                or TextureFormat.ASTC_RGBA_6x6
+                or TextureFormat.ASTC_RGB_8x8
+                or TextureFormat.ASTC_RGBA_8x8
+                or TextureFormat.ASTC_RGB_10x10
+                or TextureFormat.ASTC_RGBA_10x10
+                or TextureFormat.ASTC_RGB_12x12
+                or TextureFormat.ASTC_RGBA_12x12 => 16,
+
+            _ => 0
+        };
+    }
+
+    private static bool TryMutateVideoClip(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        AssetBundleFile? bundle,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+
+        var direct = baseField["m_VideoData"];
+        if (!direct.IsDummy
+            && direct.TemplateField.ValueType == AssetValueType.ByteArray)
+        {
+            var data = direct.AsByteArray;
+            if (MutateVideoBytes(data, intensity, rng))
+            {
+                direct.AsByteArray = data;
+                info.SetNewData(baseField);
+                return true;
+            }
+        }
+
+        // Some Unity versions stream VideoClip bytes through m_ExternalResources.
+        // When that resource lives inside the same AssetBundle, mutate the
+        // referenced range without changing the source/offset/size metadata.
+        if (bundle is null)
+            return false;
+
+        var external = baseField["m_ExternalResources"];
+        if (external.IsDummy)
+            return false;
+
+        var sourceField = external["m_Source"];
+        var offsetField = external["m_Offset"];
+        var sizeField = external["m_Size"];
+
+        if (sourceField.IsDummy || offsetField.IsDummy || sizeField.IsDummy)
+            return false;
+
+        var source = sourceField.AsString;
+        var offset = offsetField.AsULong;
+        var size = sizeField.AsULong;
+
+        if (string.IsNullOrWhiteSpace(source)
+            || size == 0
+            || offset > int.MaxValue
+            || size > int.MaxValue)
+            return false;
+
+        var name = Path.GetFileName(source.Replace('\\', '/'));
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        var resourceIndex = ResolveResourceIndex(bundle, name);
+        if (resourceIndex < 0)
+            return false;
+
+        var resourceInfo = bundle.BlockAndDirInfo.DirectoryInfos[resourceIndex];
+        bundle.GetFileRange(resourceIndex, out var fileOffset, out var fileLength);
+
+        if (fileLength <= 0 || fileLength > int.MaxValue)
+            return false;
+
+        bundle.DataReader.Position = fileOffset;
+        var bytes = bundle.DataReader.ReadBytes((int)fileLength);
+
+        if (offset >= (ulong)bytes.Length)
+            return false;
+
+        var available = bytes.Length - (long)offset;
+        var targetSize = (int)Math.Min(size, (ulong)available);
+        if (targetSize <= 16)
+            return false;
+
+        if (!MutateVideoBytes(bytes, intensity, rng, (int)offset, targetSize))
+            return false;
+
+        resourceInfo.SetNewData(bytes);
+        return true;
+    }
+
+    private static bool MutateVideoBytes(
+        byte[] bytes,
+        int intensity,
+        Random rng,
+        int startOffset = 0,
+        int length = -1)
+    {
+        if (bytes.Length < 16)
+            return false;
+
+        startOffset = Math.Clamp(startOffset, 0, bytes.Length - 1);
+        if (length < 0)
+            length = bytes.Length - startOffset;
+
+        length = Math.Clamp(length, 16, bytes.Length - startOffset);
+        var end = startOffset + length;
+
+        // Prefer MP4 mdat boxes so ftyp/moov/index metadata remain intact.
+        var ranges = new List<(int Start, int End)>();
+        var pos = startOffset;
+
+        while (pos + 8 <= end)
+        {
+            var boxSize = ReadUInt32BE(bytes, pos);
+            var type = System.Text.Encoding.ASCII.GetString(bytes, pos + 4, 4);
+
+            long boxEnd;
+            int headerSize;
+
+            if (boxSize == 1 && pos + 16 <= end)
+            {
+                var largeSize = ReadUInt64BE(bytes, pos + 8);
+                if (largeSize < 16 || largeSize > (ulong)(end - pos))
+                    break;
+
+                boxEnd = pos + (long)largeSize;
+                headerSize = 16;
+            }
+            else if (boxSize >= 8)
+            {
+                boxEnd = pos + boxSize;
+                headerSize = 8;
+            }
+            else
+            {
+                break;
+            }
+
+            if (boxEnd > end)
+                break;
+
+            if (type == "mdat" && boxEnd > pos + headerSize)
+                ranges.Add((pos + headerSize, (int)boxEnd));
+
+            pos = (int)boxEnd;
+        }
+
+        if (ranges.Count == 0)
+            ranges.Add((Math.Min(end - 1, startOffset + 1024), end));
+
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+
+        foreach (var range in ranges)
+        {
+            var available = range.End - range.Start;
+            if (available <= 0)
+                continue;
+
+            // Video needs much less damage than an arbitrary binary blob: a few
+            // bad macroblocks/keyframe slices are enough to look badly compressed.
+            var fraction = 0.004 + (0.036 * level);
+            var touches = (int)Math.Clamp(
+                available * fraction,
+                8,
+                250000);
+
+            for (var i = 0; i < touches; i++)
+            {
+                var index = rng.Next(range.Start, range.End);
+                bytes[index] &= intensity >= 85 ? (byte)0xC0 : (byte)0xE0;
+
+                if (rng.Next(100) < 18)
+                    bytes[index] ^= (byte)(1 << rng.Next(8));
+            }
+
+            if (level >= 0.50)
+            {
+                var burstCount = Math.Clamp(available / 262144, 1, 24);
+                for (var i = 0; i < burstCount; i++)
+                {
+                    var burstLength = Math.Min(
+                        256,
+                        Math.Max(16, available / 64));
+                    var burstStart = rng.Next(
+                        range.Start,
+                        Math.Max(range.Start + 1, range.End - burstLength + 1));
+
+                    for (var j = 0; j < burstLength; j++)
+                    {
+                        bytes[burstStart + j] ^= (byte)rng.Next(1, 32);
+                    }
+                }
+            }
+        }
+
+        return ranges.Count > 0;
+    }
+
+    private static bool TryMutateLight(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var changed = false;
+
+        var color = baseField["m_Color"];
+        if (!color.IsDummy)
+        {
+            var r = color["r"];
+            var g = color["g"];
+            var b = color["b"];
+
+            if (!r.IsDummy && !g.IsDummy && !b.IsDummy)
+            {
+                var shift = 0.06f + (0.16f * (float)level);
+                r.AsFloat = Math.Clamp(r.AsFloat + ((float)rng.NextDouble() - 0.5f) * shift, 0f, 2f);
+                g.AsFloat = Math.Clamp(g.AsFloat + ((float)rng.NextDouble() - 0.5f) * shift, 0f, 2f);
+                b.AsFloat = Math.Clamp(b.AsFloat + ((float)rng.NextDouble() - 0.5f) * shift, 0f, 2f);
+                changed = true;
+            }
+        }
+
+        var intensityField = baseField["m_Intensity"];
+        if (!intensityField.IsDummy && intensityField.TemplateField.ValueType == AssetValueType.Float)
+        {
+            var current = intensityField.AsFloat;
+            if (!float.IsNaN(current) && !float.IsInfinity(current))
+            {
+                var multiplier = 0.85f + ((float)rng.NextDouble() * 0.30f * (float)level);
+                intensityField.AsFloat = Math.Max(0f, current * multiplier);
+                changed = true;
+            }
+        }
+
+        var shadowBias = baseField["m_ShadowBias"];
+        if (!shadowBias.IsDummy && shadowBias.TemplateField.ValueType == AssetValueType.Float)
+        {
+            var current = shadowBias.AsFloat;
+            if (!float.IsNaN(current) && !float.IsInfinity(current))
+            {
+                shadowBias.AsFloat = Math.Max(
+                    0f,
+                    current * (0.92f + ((float)rng.NextDouble() * 0.16f * (float)level)));
+                changed = true;
+            }
+        }
+
+        if (!changed)
+            return false;
+
+        info.SetNewData(baseField);
+        return true;
+    }
+
+    private static uint ReadUInt32BE(byte[] bytes, int offset)
+    {
+        return ((uint)bytes[offset] << 24)
+            | ((uint)bytes[offset + 1] << 16)
+            | ((uint)bytes[offset + 2] << 8)
+            | bytes[offset + 3];
+    }
+
+    private static ulong ReadUInt64BE(byte[] bytes, int offset)
+    {
+        return ((ulong)ReadUInt32BE(bytes, offset) << 32)
+            | ReadUInt32BE(bytes, offset + 4);
+    }
+
+    private static bool TryMutateMaterial(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var saved = baseField["m_SavedProperties"];
+
+        if (saved.IsDummy)
+            return false;
+
+        var colors = saved["m_Colors.Array"];
+        var floats = saved["m_Floats.Array"];
+        var texEnvs = saved["m_TexEnvs.Array"];
+
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var changed = false;
+
+        if (!colors.IsDummy)
+        {
+            foreach (var pair in colors.Children)
+            {
+                var nameField = pair["first"];
+                var color = pair["second"];
+
+                if (nameField.IsDummy || color.IsDummy)
+                    continue;
+
+                var propertyName = nameField.AsString ?? string.Empty;
+                var shouldHit = intensity >= 85
+                    || propertyName.Contains("Color", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Tint", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Emission", StringComparison.OrdinalIgnoreCase);
+
+                if (!shouldHit)
+                    continue;
+
+                var r = color["r"];
+                var g = color["g"];
+                var b = color["b"];
+
+                if (r.IsDummy || g.IsDummy || b.IsDummy)
+                    continue;
+
+                // Strongly shift color channels while keeping values finite.
+                if (intensity >= 90)
+                {
+                    r.AsFloat = (float)rng.NextDouble();
+                    g.AsFloat = (float)rng.NextDouble();
+                    b.AsFloat = (float)rng.NextDouble();
+                }
+                else
+                {
+                    r.AsFloat = Math.Clamp(
+                        r.AsFloat + ((float)rng.NextDouble() - 0.5f) * (0.8f * (float)level),
+                        0f,
+                        1f);
+                    g.AsFloat = Math.Clamp(
+                        g.AsFloat + ((float)rng.NextDouble() - 0.5f) * (0.8f * (float)level),
+                        0f,
+                        1f);
+                    b.AsFloat = Math.Clamp(
+                        b.AsFloat + ((float)rng.NextDouble() - 0.5f) * (0.8f * (float)level),
+                        0f,
+                        1f);
+                }
+
+                changed = true;
+            }
+        }
+
+        if (!floats.IsDummy)
+        {
+            foreach (var pair in floats.Children)
+            {
+                var nameField = pair["first"];
+                var valueField = pair["second"];
+
+                if (nameField.IsDummy || valueField.IsDummy)
+                    continue;
+
+                var propertyName = nameField.AsString ?? string.Empty;
+
+                // Avoid render-state fields where arbitrary values could make
+                // a material disappear completely or invalidate the pipeline.
+                if (propertyName.Contains("Blend", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Cull", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Stencil", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("ZWrite", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Queue", StringComparison.OrdinalIgnoreCase)
+                    || propertyName.Contains("Mode", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (intensity < 80
+                    && !propertyName.Contains("Gloss", StringComparison.OrdinalIgnoreCase)
+                    && !propertyName.Contains("Metal", StringComparison.OrdinalIgnoreCase)
+                    && !propertyName.Contains("Smooth", StringComparison.OrdinalIgnoreCase)
+                    && !propertyName.Contains("Rough", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var current = valueField.AsFloat;
+                if (float.IsNaN(current) || float.IsInfinity(current))
+                    continue;
+
+                var delta = ((float)rng.NextDouble() - 0.5f) * (2.0f * (float)level);
+
+                valueField.AsFloat = intensity >= 90
+                    ? current * (0.15f + ((float)rng.NextDouble() * 2.5f))
+                    : current + delta;
+
+                changed = true;
+            }
+        }
+
+        if (!texEnvs.IsDummy)
+        {
+            foreach (var pair in texEnvs.Children)
+            {
+                if (intensity < 75 && rng.Next(0, 100) >= intensity)
+                    continue;
+
+                var second = pair["second"];
+                var scale = second["m_Scale"];
+                var offset = second["m_Offset"];
+
+                if (!scale.IsDummy)
+                {
+                    var x = scale["x"];
+                    var y = scale["y"];
+
+                    if (!x.IsDummy && !y.IsDummy)
+                    {
+                        var multiplier = intensity >= 90
+                            ? 0.25f + ((float)rng.NextDouble() * 4.5f)
+                            : 0.75f + ((float)rng.NextDouble() * 0.9f);
+
+                        x.AsFloat *= multiplier;
+                        y.AsFloat *= multiplier;
+                        changed = true;
+                    }
+                }
+
+                if (!offset.IsDummy)
+                {
+                    var x = offset["x"];
+                    var y = offset["y"];
+
+                    if (!x.IsDummy && !y.IsDummy)
+                    {
+                        x.AsFloat += ((float)rng.NextDouble() - 0.5f)
+                            * (intensity >= 90 ? 3f : 0.75f);
+                        y.AsFloat += ((float)rng.NextDouble() - 0.5f)
+                            * (intensity >= 90 ? 3f : 0.75f);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (!changed)
+            return false;
+
+        info.SetNewData(baseField);
+        return true;
+    }
+
+    private static bool TryMutateTextAsset(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var script = baseField["m_Script"];
+
+        if (script.IsDummy
+            || script.TemplateField.ValueType != AssetValueType.String)
+            return false;
+
+        var text = script.AsString;
+        if (string.IsNullOrEmpty(text) || text.Length < 8)
+            return false;
+
+        var nameField = baseField["m_Name"];
+        var assetName = nameField.IsDummy ? string.Empty : nameField.AsString ?? string.Empty;
+
+        // Avoid settings/scripts that are unusually likely to be required for
+        // bootstrapping. User-facing configuration/localization/data still gets
+        // corrupted.
+        if (assetName.Contains("manifest", StringComparison.OrdinalIgnoreCase)
+            || assetName.Contains("version", StringComparison.OrdinalIgnoreCase)
+            || assetName.Contains("config", StringComparison.OrdinalIgnoreCase)
+            || assetName.Contains("scripting", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var chars = text.ToCharArray();
+        var touches = (int)Math.Clamp(
+            chars.Length * (0.01 + (0.12 * Math.Clamp(intensity, 1, 100) / 100.0)),
+            2,
+            12000);
+
+        for (var i = 0; i < touches; i++)
+        {
+            var index = rng.Next(chars.Length);
+            var ch = chars[index];
+
+            if (ch == '\n' || ch == '\r' || ch == '\t')
+                continue;
+
+            if (char.IsLetterOrDigit(ch))
+            {
+                const string glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%&*?";
+                chars[index] = glyphs[rng.Next(glyphs.Length)];
+            }
+            else if (!char.IsWhiteSpace(ch))
+            {
+                chars[index] = rng.Next(2) == 0 ? '_' : '~';
+            }
+        }
+
+        var result = new string(chars);
+        if (result == text)
+            return false;
+
+        script.AsString = result;
+        info.SetNewData(baseField);
+        return true;
+    }
+
+    private static bool TryMutateMesh(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var indexBuffer = baseField["m_IndexBuffer"];
+
+        if (indexBuffer.IsDummy
+            || indexBuffer.TemplateField.ValueType != AssetValueType.ByteArray)
+            return false;
+
+        var bytes = indexBuffer.AsByteArray;
+        if (bytes.Length < 8)
+            return false;
+
+        // Only edit index bytes; this keeps mesh metadata/vertex buffer sizes
+        // intact while producing missing, stretched, or mis-triangulated geometry.
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        var touches = (int)Math.Clamp(
+            bytes.Length * (0.002 + (0.04 * level)),
+            2,
+            50000);
+
+        for (var i = 0; i < touches; i++)
+        {
+            var index = rng.Next(bytes.Length);
+
+            if (intensity >= 90)
+            {
+                bytes[index] = (byte)rng.Next(0, 256);
+            }
+            else
+            {
+                bytes[index] ^= (byte)rng.Next(1, 32);
+            }
+        }
+
+        indexBuffer.AsByteArray = bytes;
+        info.SetNewData(baseField);
+        return true;
     }
 
     private static bool TryMutateExternalAudio(
@@ -391,28 +1797,22 @@ public static class UnityMutationEngine
         if (targetSize <= 24)
             return false;
 
-        var segment = new byte[targetSize];
-        Buffer.BlockCopy(bytes, (int)offset, segment, 0, targetSize);
-
-        MutateEncodedRegion(
-            segment,
-            intensity,
-            rng,
-            preservePrefix: 24);
-
-        Buffer.BlockCopy(
-            segment,
-            0,
+        if (!MutateEncodedRegion(
             bytes,
             (int)offset,
-            targetSize);
+            targetSize,
+            intensity,
+            rng,
+            preservePrefix: 24))
+            return false;
 
-        // Replacing the complete resource entry keeps all offsets valid.
         resourceInfo.SetNewData(bytes);
         return true;
     }
 
-    private static int ResolveResourceIndex(AssetBundleFile bundle, string name)
+    private static int ResolveResourceIndex(
+        AssetBundleFile bundle,
+        string name)
     {
         for (var i = 0; i < bundle.BlockAndDirInfo.DirectoryInfos.Count; i++)
         {
@@ -440,89 +1840,68 @@ public static class UnityMutationEngine
         return -1;
     }
 
-    private static bool ShouldHit(int intensity, Random rng)
-        => rng.Next(0, 100) < Math.Clamp(intensity, 1, 100);
-
-    private static void CorruptPixels(
-        byte[] pixels,
-        int width,
-        int height,
+    private static bool ShouldHit(
         int intensity,
         Random rng)
-    {
-        if (width <= 0 || height <= 0 || pixels.Length < 4)
-            return;
+        => rng.Next(0, 100) < Math.Clamp(intensity, 1, 100);
 
-        var pixelCount = Math.Min(
-            (long)width * height,
-            pixels.Length / 4L);
-
-        var touches = (int)Math.Clamp(
-            pixelCount * Math.Clamp(intensity, 1, 100) / 900L,
-            8,
-            50000);
-
-        for (var i = 0; i < touches; i++)
-        {
-            var x = rng.Next(width);
-            var y = rng.Next(height);
-            var index = checked((y * width + x) * 4);
-
-            if (index + 3 >= pixels.Length)
-                continue;
-
-            switch (rng.Next(6))
-            {
-                case 0:
-                    pixels[index] = 0;
-                    break;
-                case 1:
-                    pixels[index + 1] = 0;
-                    break;
-                case 2:
-                    pixels[index + 2] = 0;
-                    break;
-                case 3:
-                    pixels[index] ^= 0xFF;
-                    break;
-                case 4:
-                    pixels[index + 3] = (byte)rng.Next(40, 256);
-                    break;
-                default:
-                    var nearby = Math.Clamp(
-                        index + rng.Next(-8, 9) * 4,
-                        0,
-                        pixels.Length - 4);
-
-                    pixels[index] = pixels[nearby];
-                    pixels[index + 1] = pixels[nearby + 1];
-                    pixels[index + 2] = pixels[nearby + 2];
-                    break;
-            }
-        }
-    }
-
-    private static void MutateEncodedRegion(
+    private static bool MutateEncodedRegion(
         byte[] bytes,
+        int startOffset,
+        int length,
         int intensity,
         Random rng,
         int preservePrefix = 16)
     {
-        if (bytes.Length <= preservePrefix + 4)
-            return;
+        if (length <= preservePrefix + 4
+            || startOffset < 0
+            || startOffset >= bytes.Length)
+            return false;
 
-        var start = Math.Clamp(preservePrefix, 0, bytes.Length - 1);
-        var available = bytes.Length - start;
+        var endExclusive = Math.Min(
+            bytes.Length,
+            startOffset + length);
+
+        var start = Math.Clamp(
+            startOffset + preservePrefix,
+            startOffset,
+            endExclusive - 1);
+
+        var available = endExclusive - start;
+
+        if (available <= 0)
+            return false;
 
         var count = (int)Math.Clamp(
-            available * Math.Clamp(intensity, 1, 100) / 1800.0,
+            available * (0.002 + (0.028 * Math.Clamp(intensity, 1, 100) / 100.0)),
             1,
-            25000);
+            60000);
 
         for (var i = 0; i < count; i++)
         {
-            var index = rng.Next(start, bytes.Length);
+            var index = rng.Next(start, endExclusive);
             bytes[index] ^= (byte)rng.Next(1, 256);
         }
+
+        return count > 0;
     }
+
+    private static uint ReadUInt32LE(byte[] bytes, int offset)
+        => System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+            bytes.AsSpan(offset, 4));
+
+    private static ushort ReadUInt16LE(byte[] bytes, int offset)
+        => System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(
+            bytes.AsSpan(offset, 2));
+
+    private static ulong ReadUInt64LE(byte[] bytes, int offset)
+        => System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(
+            bytes.AsSpan(offset, 8));
+
+    private readonly record struct Fsb5Sample(int Start, int End);
+
+    private readonly record struct Fsb5Info(
+        uint Mode,
+        List<Fsb5Sample> Samples,
+        int End);
 }
