@@ -16,7 +16,8 @@ public sealed record CorruptionProgress(
     int TextAssetsChanged = 0,
     int MeshesChanged = 0,
     int VideosChanged = 0,
-    int LightsChanged = 0);
+    int LightsChanged = 0,
+    int IconsChanged = 0);
 
 public sealed record CorruptionResult(
     string OutputPath,
@@ -25,4 +26,7 @@ public sealed record CorruptionResult(
     int FilesChanged,
     int MaterialsChanged = 0,
     int TextAssetsChanged = 0,
-    int MeshesChanged = 0);
+    int MeshesChanged = 0,
+    int VideosChanged = 0,
+    int LightsChanged = 0,
+    int IconsChanged = 0);
