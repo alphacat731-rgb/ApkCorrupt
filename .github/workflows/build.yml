@@ -1,3 +1,4 @@
+# Build verification marker: 2026-09-23
 name: Build APK Corrupt
 
 on:
@@ -21,16 +22,43 @@ jobs:
       - name: Restore
         run: dotnet restore ApkCorrupt.sln
 
-      - name: Build
-        run: dotnet build ApkCorrupt.sln -c Debug -f net10.0-android --no-restore
+      - name: Build standalone APK
+        run: dotnet build ApkCorrupt.sln -c Release -f net10.0-android --no-restore
 
-      - name: Collect APK
+      - name: Collect and verify APK
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
-          find src/ApkCorrupt/bin/Debug/net10.0-android -name "*.apk" -type f -exec cp {} artifacts/ \;
+
+          apk="$(find src/ApkCorrupt/bin/Release/net10.0-android -name '*.apk' -type f | head -n 1)"
+          test -n "$apk"
+
+          echo "APK: $apk"
+          echo "Checking that managed assemblies are embedded..."
+
+          # .NET 9/10 Android normally stores managed assemblies in the ABI-specific
+          # assembly store under lib/, rather than the older assemblies/ directory.
+          # Accept both layouts so the check matches the actual APK format.
+          unzip -Z1 "$apk" > apk-entries.txt
+
+          # Read the ZIP listing from a file instead of piping unzip into grep -q.
+          # With pipefail enabled, grep -q can close the pipe early and make unzip
+          # exit with SIGPIPE, which incorrectly turns a successful match into a CI failure.
+          if ! grep -qE '(^|/)(assemblies/|lib/[^/]+/(libassembly-store\.so|libassemblies\.[^/]+\.blob\.so))' apk-entries.txt; then
+            echo "ERROR: Release APK does not contain an embedded managed assembly store."
+            echo "The APK must be self-contained so it can be installed and launched without Fast Deployment."
+            echo "APK entries under lib/:"
+            grep -E '(^|/)lib/' apk-entries.txt | head -n 40 || true
+            exit 1
+          fi
+
+          echo "Embedded managed assembly store detected."
+
+          cp "$apk" artifacts/ApkCorrupt.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: apkcorrupt
-          path: artifacts/*.apk
+          path: artifacts/ApkCorrupt.apk
