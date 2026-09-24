@@ -1,4 +1,5 @@
 using Android.Content;
+using Android.OS;
 using Android.Provider;
 
 namespace ApkCorrupt.Core;
@@ -18,13 +19,20 @@ public static class ApkExport
             ?? throw new InvalidOperationException("No ContentResolver available.");
 
         var values = new ContentValues();
-        values.Put("display_name", displayName);
-        values.Put("mime_type", "application/vnd.android.package-archive");
-        values.Put("relative_path", "Download/");
+        values.Put(MediaStore.MediaColumns.DisplayName, displayName);
+        values.Put(MediaStore.MediaColumns.MimeType, "application/vnd.android.package-archive");
+        values.Put(
+            MediaStore.MediaColumns.RelativePath,
+            Android.OS.Environment.DirectoryDownloads + "/");
+        values.Put(MediaStore.MediaColumns.IsPending, 1);
 
-        var uri = resolver.Insert(
-            MediaStore.Downloads.ExternalContentUri,
-            values);
+        // MediaStore.Downloads on some vendor ROMs rejects the standard
+        // display_name column. MediaStore.Files is accepted on those ROMs
+        // while still placing the APK in the user's Downloads directory.
+        var collection = MediaStore.Files.GetContentUri(
+            MediaStore.VolumeExternalPrimary);
+
+        var uri = resolver.Insert(collection, values);
 
         if (uri is null)
             throw new InvalidOperationException("Could not create the Downloads entry.");
@@ -36,6 +44,11 @@ public static class ApkExport
                 ?? throw new InvalidOperationException("Could not open the Downloads output.");
 
             await input.CopyToAsync(output, cancellationToken);
+
+            var published = new ContentValues();
+            published.Put(MediaStore.MediaColumns.IsPending, 0);
+            resolver.Update(uri, published, null, null);
+
             return uri.ToString()!;
         }
         catch
