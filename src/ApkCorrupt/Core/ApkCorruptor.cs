@@ -281,7 +281,7 @@ public static class ApkCorruptor
     private static bool IsGameIcon(string name)
     {
         var lower = name.ToLowerInvariant();
-        return lower.StartsWith("res/mipmap-")
+        return lower.StartsWith("resources/res/mipmap-")
             && lower.EndsWith(".png")
             && (lower.Contains("/app_icon.png")
                 || lower.Contains("/app_icon_round.png"));
