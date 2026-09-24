@@ -162,9 +162,10 @@ public static class ApkCorruptor
                         await stream.CopyToAsync(ms, cancellationToken);
                         var bytes = ms.ToArray();
 
-                        if (MutateGameIconInPlace(bytes, options.Intensity, rng))
+                        var icon = MutateGameIcon(bytes, options.Intensity, rng);
+                        if (icon is not null)
                         {
-                            mutated = bytes;
+                            mutated = icon;
                             iconCount++;
                             filesChanged++;
                         }
@@ -337,16 +338,19 @@ public static class ApkCorruptor
         return ext is ".mp4" or ".m4v" or ".mov" or ".webm";
     }
 
-    private static bool MutateGameIconInPlace(byte[] bytes, int intensity, Random rng)
+    private static byte[]? MutateGameIcon(
+        byte[] bytes,
+        int intensity,
+        Random rng)
     {
         if (bytes.Length < 32)
-            return false;
+            return null;
 
         try
         {
             using var bitmap = BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length);
             if (bitmap is null || bitmap.Width == 0 || bitmap.Height == 0)
-                return false;
+                return null;
 
             var pixels = new int[bitmap.Width * bitmap.Height];
             bitmap.GetPixels(pixels, 0, bitmap.Width, 0, 0, bitmap.Width, bitmap.Height);
@@ -363,17 +367,18 @@ public static class ApkCorruptor
                     var g = (byte)((uint)p >> 8);
                     var b = (byte)p;
 
-                    // Keep the original icon recognizable, but introduce a
-                    // deterministic "corrupted thumbnail" look.
+                    // Preserve the same source icon while making it look visibly
+                    // corrupted: channel swaps, posterization and small color
+                    // jitter. Alpha is preserved.
                     if (((x / 6) + (y / 6)) % 3 == 0)
                         (r, b) = (b, r);
 
                     var posterize = intensity >= 85 ? 32 : 16;
-                    r = (byte)Math.Clamp((r / posterize) * posterize, 0, 255);
-                    g = (byte)Math.Clamp((g / posterize) * posterize, 0, 255);
-                    b = (byte)Math.Clamp((b / posterize) * posterize, 0, 255);
+                    r = (byte)((r / posterize) * posterize);
+                    g = (byte)((g / posterize) * posterize);
+                    b = (byte)((b / posterize) * posterize);
 
-                    var jitter = (int)(level * 42);
+                    var jitter = Math.Max(1, (int)(level * 42));
                     if (rng.Next(100) < (int)(8 + 22 * level))
                     {
                         r = (byte)Math.Clamp(r + rng.Next(-jitter, jitter + 1), 0, 255);
@@ -386,32 +391,28 @@ public static class ApkCorruptor
                 }
             }
 
-            bitmap.SetPixels(pixels, 0, bitmap.Width, 0, 0, bitmap.Width, bitmap.Height);
+            bitmap.SetPixels(
+                pixels,
+                0,
+                bitmap.Width,
+                0,
+                0,
+                bitmap.Width,
+                bitmap.Height);
 
             using var output = new MemoryStream();
             if (!bitmap.Compress(Bitmap.CompressFormat.Png, 100, output))
-                return false;
+                return null;
 
             var encoded = output.ToArray();
-            if (encoded.Length == 0)
-                return false;
-
-            encoded.CopyTo(bytes, 0);
-            if (encoded.Length != bytes.Length)
-            {
-                // The caller needs the actual byte array; this function is only
-                // passed an in-place buffer. Return false for size-changing
-                // recompression so the original remains untouched.
-                return false;
-            }
-
-            return true;
+            return encoded.Length == 0 ? null : encoded;
         }
         catch
         {
-            return false;
+            return null;
         }
     }
+
 
     private static bool MutateVideoBytesInPlace(byte[] bytes, int intensity, Random rng)
     {
