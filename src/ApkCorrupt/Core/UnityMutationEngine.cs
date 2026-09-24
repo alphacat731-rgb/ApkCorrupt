@@ -451,8 +451,6 @@ public static class UnityMutationEngine
         var meshes = 0;
         var videos = 0;
         var lights = 0;
-        var videos = 0;
-        var lights = 0;
 
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Texture2D))
         {
@@ -559,7 +557,8 @@ public static class UnityMutationEngine
 
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.TextAsset))
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            // This audiovisual profile never mutates TextAsset/config content.
+            continue;
 
             if (!ShouldHit(options.Intensity, rng))
                 continue;
@@ -584,7 +583,8 @@ public static class UnityMutationEngine
 
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Mesh))
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            // This audiovisual profile never mutates mesh topology.
+            continue;
 
             if (!ShouldHit(options.Intensity, rng))
                 continue;
@@ -808,7 +808,8 @@ public static class UnityMutationEngine
 
             foreach (var info in assets.file.GetAssetsOfType(AssetClassID.TextAsset))
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                // This audiovisual profile never mutates TextAsset/config content.
+                continue;
 
                 if (!ShouldHit(options.Intensity, rng))
                     continue;
@@ -833,7 +834,8 @@ public static class UnityMutationEngine
 
             foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Mesh))
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                // This audiovisual profile never mutates mesh topology.
+                continue;
 
                 if (!ShouldHit(options.Intensity, rng))
                     continue;
