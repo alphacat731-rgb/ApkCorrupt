@@ -79,3 +79,4 @@ public static class ApkSignerBridge
 
         return Task.CompletedTask;
     }
+}
