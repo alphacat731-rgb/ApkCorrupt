@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using Android.Graphics;
 
 namespace ApkCorrupt.Core;
 
@@ -12,7 +13,8 @@ public static class ApkCorruptor
     private static readonly HashSet<string> UnityLooseExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg",
-        ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff"
+        ".wav", ".ogg", ".mp3", ".m4a", ".aif", ".aiff",
+        ".mp4", ".m4v", ".mov", ".webm"
     };
 
     private static bool IsSignatureEntry(string name)
@@ -77,6 +79,9 @@ public static class ApkCorruptor
         var materialCount = 0;
         var textAssetCount = 0;
         var meshCount = 0;
+        var videoCount = 0;
+        var lightCount = 0;
+        var iconCount = 0;
         var filesChanged = 0;
         var candidateIndex = 0;
 
@@ -144,8 +149,24 @@ public static class ApkCorruptor
                                 materialCount += mutation.MaterialsChanged;
                                 textAssetCount += mutation.TextAssetsChanged;
                                 meshCount += mutation.MeshesChanged;
+                                videoCount += mutation.VideosChanged;
+                                lightCount += mutation.LightsChanged;
                                 filesChanged++;
                             }
+                        }
+                    }
+                    else if (IsGameIcon(entry.FullName))
+                    {
+                        await using var stream = entry.Open();
+                        using var ms = new MemoryStream();
+                        await stream.CopyToAsync(ms, cancellationToken);
+                        var bytes = ms.ToArray();
+
+                        if (MutateGameIconInPlace(bytes, options.Intensity, rng))
+                        {
+                            mutated = bytes;
+                            iconCount++;
+                            filesChanged++;
                         }
                     }
                     else if (isLoose)
@@ -157,15 +178,27 @@ public static class ApkCorruptor
 
                         if (ShouldMutateLoose(entry.FullName))
                         {
-                            MutateBytesInPlace(bytes, options.Intensity, rng);
-                            mutated = bytes;
-
-                            if (IsAudio(entry.FullName))
-                                audioCount++;
+                            if (IsVideo(entry.FullName))
+                            {
+                                if (MutateVideoBytesInPlace(bytes, options.Intensity, rng))
+                                {
+                                    mutated = bytes;
+                                    videoCount++;
+                                    filesChanged++;
+                                }
+                            }
                             else
-                                textureCount++;
+                            {
+                                MutateBytesInPlace(bytes, options.Intensity, rng);
+                                mutated = bytes;
 
-                            filesChanged++;
+                                if (IsAudio(entry.FullName))
+                                    audioCount++;
+                                else
+                                    textureCount++;
+
+                                filesChanged++;
+                            }
                         }
                     }
 
@@ -193,7 +226,10 @@ public static class ApkCorruptor
                         filesChanged,
                         materialCount,
                         textAssetCount,
-                        meshCount));
+                        meshCount,
+                        videoCount,
+                        lightCount,
+                        iconCount));
                 }
             }
 
@@ -222,7 +258,10 @@ public static class ApkCorruptor
                 filesChanged,
                 materialCount,
                 textAssetCount,
-                meshCount);
+                meshCount,
+                videoCount,
+                lightCount,
+                iconCount);
         }
         finally
         {
@@ -237,6 +276,15 @@ public static class ApkCorruptor
         }
     }
 
+    private static bool IsGameIcon(string name)
+    {
+        var lower = name.ToLowerInvariant();
+        return lower.StartsWith("res/mipmap-")
+            && lower.EndsWith(".png")
+            && (lower.Contains("/app_icon.png")
+                || lower.Contains("/app_icon_round.png"));
+    }
+
     private static bool ShouldMutateLoose(string name)
     {
         var ext = Path.GetExtension(name);
@@ -248,7 +296,11 @@ public static class ApkCorruptor
             || ext.Equals(".mp3", StringComparison.OrdinalIgnoreCase)
             || ext.Equals(".m4a", StringComparison.OrdinalIgnoreCase)
             || ext.Equals(".aif", StringComparison.OrdinalIgnoreCase)
-            || ext.Equals(".aiff", StringComparison.OrdinalIgnoreCase);
+            || ext.Equals(".aiff", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".mp4", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".m4v", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".mov", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".webm", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsAudio(string name)
@@ -277,6 +329,179 @@ public static class ApkCorruptor
         return lower.Equals("resources.arsc")
             || lower.EndsWith(".so")
             || lower.Contains("/lib/");
+    }
+
+    private static bool IsVideo(string name)
+    {
+        var ext = Path.GetExtension(name).ToLowerInvariant();
+        return ext is ".mp4" or ".m4v" or ".mov" or ".webm";
+    }
+
+    private static bool MutateGameIconInPlace(byte[] bytes, int intensity, Random rng)
+    {
+        if (bytes.Length < 32)
+            return false;
+
+        try
+        {
+            using var bitmap = BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length);
+            if (bitmap is null || bitmap.Width == 0 || bitmap.Height == 0)
+                return false;
+
+            var pixels = new int[bitmap.Width * bitmap.Height];
+            bitmap.GetPixels(pixels, 0, bitmap.Width, 0, 0, bitmap.Width, bitmap.Height);
+
+            var level = Math.Clamp(intensity, 1, 100) / 100.0;
+
+            for (var y = 0; y < bitmap.Height; y++)
+            {
+                for (var x = 0; x < bitmap.Width; x++)
+                {
+                    var p = pixels[(y * bitmap.Width) + x];
+                    var a = (byte)((uint)p >> 24);
+                    var r = (byte)((uint)p >> 16);
+                    var g = (byte)((uint)p >> 8);
+                    var b = (byte)p;
+
+                    // Keep the original icon recognizable, but introduce a
+                    // deterministic "corrupted thumbnail" look.
+                    if (((x / 6) + (y / 6)) % 3 == 0)
+                        (r, b) = (b, r);
+
+                    var posterize = intensity >= 85 ? 32 : 16;
+                    r = (byte)Math.Clamp((r / posterize) * posterize, 0, 255);
+                    g = (byte)Math.Clamp((g / posterize) * posterize, 0, 255);
+                    b = (byte)Math.Clamp((b / posterize) * posterize, 0, 255);
+
+                    var jitter = (int)(level * 42);
+                    if (rng.Next(100) < (int)(8 + 22 * level))
+                    {
+                        r = (byte)Math.Clamp(r + rng.Next(-jitter, jitter + 1), 0, 255);
+                        g = (byte)Math.Clamp(g + rng.Next(-jitter, jitter + 1), 0, 255);
+                        b = (byte)Math.Clamp(b + rng.Next(-jitter, jitter + 1), 0, 255);
+                    }
+
+                    pixels[(y * bitmap.Width) + x] =
+                        unchecked((int)((uint)a << 24 | (uint)r << 16 | (uint)g << 8 | b));
+                }
+            }
+
+            bitmap.SetPixels(pixels, 0, bitmap.Width, 0, 0, bitmap.Width, bitmap.Height);
+
+            using var output = new MemoryStream();
+            if (!bitmap.Compress(Bitmap.CompressFormat.Png, 100, output))
+                return false;
+
+            var encoded = output.ToArray();
+            if (encoded.Length == 0)
+                return false;
+
+            encoded.CopyTo(bytes, 0);
+            if (encoded.Length != bytes.Length)
+            {
+                // The caller needs the actual byte array; this function is only
+                // passed an in-place buffer. Return false for size-changing
+                // recompression so the original remains untouched.
+                return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool MutateVideoBytesInPlace(byte[] bytes, int intensity, Random rng)
+    {
+        if (bytes.Length < 32)
+            return false;
+
+        var ranges = new List<(int Start, int End)>();
+        var pos = 0;
+
+        while (pos + 8 <= bytes.Length)
+        {
+            var size = ReadUInt32BE(bytes, pos);
+            var type = System.Text.Encoding.ASCII.GetString(bytes, pos + 4, 4);
+
+            long end;
+            var header = 8;
+
+            if (size == 1 && pos + 16 <= bytes.Length)
+            {
+                var large = ReadUInt64BE(bytes, pos + 8);
+                if (large < 16 || large > (ulong)(bytes.Length - pos))
+                    break;
+
+                end = pos + (long)large;
+                header = 16;
+            }
+            else if (size >= 8 && size <= bytes.Length - pos)
+            {
+                end = pos + size;
+            }
+            else
+            {
+                break;
+            }
+
+            if (type == "mdat" && end > pos + header)
+                ranges.Add((pos + header, (int)end));
+
+            pos = (int)end;
+        }
+
+        if (ranges.Count == 0)
+            return false;
+
+        var level = Math.Clamp(intensity, 1, 100) / 100.0;
+        foreach (var range in ranges)
+        {
+            var available = range.End - range.Start;
+            var touches = (int)Math.Clamp(
+                available * (0.003 + 0.025 * level),
+                8,
+                200000);
+
+            for (var i = 0; i < touches; i++)
+            {
+                var idx = rng.Next(range.Start, range.End);
+                bytes[idx] &= intensity >= 85 ? (byte)0xC0 : (byte)0xE0;
+
+                if (rng.Next(100) < 12)
+                    bytes[idx] ^= (byte)(1 << rng.Next(8));
+            }
+
+            if (level >= 0.6)
+            {
+                var bursts = Math.Clamp(available / 262144, 1, 16);
+                for (var i = 0; i < bursts; i++)
+                {
+                    var burstLen = Math.Min(160, Math.Max(12, available / 96));
+                    var start = rng.Next(range.Start, Math.Max(range.Start + 1, range.End - burstLen + 1));
+                    for (var j = 0; j < burstLen; j++)
+                        bytes[start + j] ^= (byte)rng.Next(1, 24);
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static uint ReadUInt32BE(byte[] bytes, int offset)
+    {
+        return ((uint)bytes[offset] << 24)
+            | ((uint)bytes[offset + 1] << 16)
+            | ((uint)bytes[offset + 2] << 8)
+            | bytes[offset + 3];
+    }
+
+    private static ulong ReadUInt64BE(byte[] bytes, int offset)
+    {
+        return ((ulong)ReadUInt32BE(bytes, offset) << 32)
+            | ReadUInt32BE(bytes, offset + 4);
     }
 
     private static void MutateBytesInPlace(byte[] bytes, int intensity, Random rng)
