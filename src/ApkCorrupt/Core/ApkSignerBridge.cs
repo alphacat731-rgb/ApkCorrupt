@@ -46,41 +46,38 @@ public static class ApkSignerBridge
         string certPath,
         CancellationToken cancellationToken)
     {
-        return Task.Run(() =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
+        // JNI local references belong to the Android thread's local reference
+        // table. Do not move this call to Task.Run: the worker thread has a
+        // different JNIEnv. Also, FindClass returns a local/global-managed
+        // reference that the Xamarin runtime owns here; deleting it manually
+        // can trigger "Attempt to delete global reference as local JNI reference".
+        cancellationToken.ThrowIfCancellationRequested();
 
-            var clazz = JNIEnv.FindClass(JavaClass);
-            if (clazz == IntPtr.Zero)
-                throw new InvalidOperationException("ApkSignerBridge Java class was not found.");
+        var clazz = JNIEnv.FindClass(JavaClass);
+        if (clazz == IntPtr.Zero)
+            throw new InvalidOperationException("ApkSignerBridge Java class was not found.");
 
-            try
-            {
-                var method = JNIEnv.GetStaticMethodID(
-                    clazz,
-                    "alignAndSign",
-                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
+        var method = JNIEnv.GetStaticMethodID(
+            clazz,
+            "alignAndSign",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z");
 
-                using var jInput = new Java.Lang.String(input);
-                using var jOutput = new Java.Lang.String(output);
-                using var jKey = new Java.Lang.String(keyPath);
-                using var jCert = new Java.Lang.String(certPath);
+        using var jInput = new Java.Lang.String(input);
+        using var jOutput = new Java.Lang.String(output);
+        using var jKey = new Java.Lang.String(keyPath);
+        using var jCert = new Java.Lang.String(certPath);
 
-                var ok = JNIEnv.CallStaticBooleanMethod(
-                    clazz,
-                    method,
-                    new JValue(jInput.Handle),
-                    new JValue(jOutput.Handle),
-                    new JValue(jKey.Handle),
-                    new JValue(jCert.Handle));
+        var ok = JNIEnv.CallStaticBooleanMethod(
+            clazz,
+            method,
+            new JValue(jInput.Handle),
+            new JValue(jOutput.Handle),
+            new JValue(jKey.Handle),
+            new JValue(jCert.Handle));
 
-                if (!ok)
-                    throw new InvalidOperationException("APK signing bridge returned false.");
-            }
-            finally
-            {
-                JNIEnv.DeleteLocalRef(clazz);
-            }
-        }, cancellationToken);
+        if (!ok)
+            throw new InvalidOperationException("APK signing bridge returned false.");
+
+        return Task.CompletedTask;
     }
 }
