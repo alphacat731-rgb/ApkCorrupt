@@ -620,205 +620,289 @@ public static class UnityMutationEngine
         var meshes = 0;
         var videos = 0;
         var lights = 0;
+        var tempFiles = new List<string>();
 
-        for (var i = 0; i < bundle.file.BlockAndDirInfo.DirectoryInfos.Count; i++)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var dirInfo = bundle.file.BlockAndDirInfo.DirectoryInfos[i];
-            if (!dirInfo.IsSerialized)
-                continue;
-
-            AssetsFileInstance assets;
-            try
-            {
-                assets = manager.LoadAssetsFileFromBundle(bundle, i, false);
-            }
-            catch
-            {
-                continue;
-            }
-
-            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Texture2D))
+            for (var i = 0; i < bundle.file.BlockAndDirInfo.DirectoryInfos.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (!options.Textures)
+                var dirInfo = bundle.file.BlockAndDirInfo.DirectoryInfos[i];
+                if (!dirInfo.IsSerialized)
                     continue;
+
+                AssetsFileInstance? assets = null;
+                string? tempPath = null;
 
                 try
                 {
-                    if (TryMutateTexture(
-                        manager,
-                        assets,
-                        info,
-                        bundle.file,
-                        options.Intensity,
-                        rng))
+                    // First use the native bundle loader.
+                    assets = manager.LoadAssetsFileFromBundle(bundle, i, true);
+
+                    // Fallback: extract the decompressed directory node and parse
+                    // it as a normal .assets file. This specifically covers the
+                    // UnityFS 2021.1 LZ4HC layout used by the supplied APK.
+                    if (assets is null || !HasVisualOrAudioAssets(assets))
                     {
-                        textures++;
-                    }
-                }
-                catch
-                {
-                    // Unsupported texture/type tree: skip.
-                }
-            }
+                        bundle.GetFileRange(i, out var fileOffset, out var fileLength);
 
-
-            foreach (var info in assets.file.GetAssetsOfType(VideoClipClassId))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (!options.Textures)
-                    continue;
-
-                try
-                {
-                    if (TryMutateVideoClip(
-                        manager,
-                        assets,
-                        info,
-                        bundle.file,
-                        options.Intensity,
-                        rng))
-                    {
-                        videos++;
-                    }
-                }
-                catch
-                {
-                    // Best-effort video mutation.
-                }
-            }
-
-            foreach (var info in assets.file.GetAssetsOfType(LightClassId))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (!options.Textures)
-                    continue;
-
-                try
-                {
-                    if (TryMutateLight(
-                        manager,
-                        assets,
-                        info,
-                        options.Intensity,
-                        rng))
-                    {
-                        lights++;
-                    }
-                }
-                catch
-                {
-                    // Best-effort lighting mutation.
-                }
-            }
-
-            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Material))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (!ShouldHit(options.Intensity, rng))
-                    continue;
-
-                try
-                {
-                    if (TryMutateMaterial(
-                        manager,
-                        assets,
-                        info,
-                        options.Intensity,
-                        rng))
-                    {
-                        materials++;
-                    }
-                }
-                catch
-                {
-                    // Best-effort material mutation.
-                }
-            }
-
-            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.AudioClip))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (!options.Audio)
-                    continue;
-
-                try
-                {
-                    var baseField = manager.GetBaseField(assets, info);
-                    var audioData = baseField["m_AudioData"];
-
-                    if (!audioData.IsDummy
-                        && audioData.TemplateField.ValueType == AssetValueType.ByteArray)
-                    {
-                        var bytes = audioData.AsByteArray;
-                        if (bytes.Length > 32
-                            && MutateEncodedRegion(
-                                bytes,
-                                0,
-                                bytes.Length,
-                                options.Intensity,
-                                rng,
-                                preservePrefix: 32))
-                        {
-                            audioData.AsByteArray = bytes;
-                            info.SetNewData(baseField);
-                            audio++;
+                        if (fileLength <= 0 || fileLength > int.MaxValue)
                             continue;
+
+                        tempPath = Path.Combine(
+                            Path.GetTempPath(),
+                            $"apkcorrupt-{Guid.NewGuid():N}-{Path.GetFileName(dirInfo.Name)}");
+
+                        bundle.DataReader.Position = fileOffset;
+                        await using (var temp = File.Create(tempPath))
+                        {
+                            var remaining = fileLength;
+                            var buffer = new byte[1024 * 1024];
+
+                            while (remaining > 0)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+
+                                var take = (int)Math.Min(buffer.Length, remaining);
+                                var chunk = bundle.DataReader.ReadBytes(take);
+                                if (chunk.Length != take)
+                                    throw new EndOfStreamException();
+
+                                await temp.WriteAsync(chunk, cancellationToken);
+                                remaining -= chunk.Length;
+                            }
+                        }
+
+                        tempFiles.Add(tempPath);
+                        assets = manager.LoadAssetsFile(tempPath, false);
+                    }
+
+                    if (assets is null)
+                        continue;
+
+                    var fileChanged = false;
+
+                    foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Texture2D))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        if (!options.Textures)
+                            continue;
+
+                        try
+                        {
+                            if (TryMutateTexture(
+                                manager,
+                                assets,
+                                info,
+                                bundle.file,
+                                options.Intensity,
+                                rng))
+                            {
+                                textures++;
+                                fileChanged = true;
+                            }
+                        }
+                        catch
+                        {
+                            // Unsupported texture/type tree: skip.
                         }
                     }
 
-                    if (TryMutateExternalAudio(
-                        bundle.file,
-                        baseField,
-                        options.Intensity,
-                        rng))
+                    foreach (var info in assets.file.GetAssetsOfType(VideoClipClassId))
                     {
-                        audio++;
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        if (!options.Textures)
+                            continue;
+
+                        try
+                        {
+                            if (TryMutateVideoClip(
+                                manager,
+                                assets,
+                                info,
+                                bundle.file,
+                                options.Intensity,
+                                rng))
+                            {
+                                videos++;
+                                fileChanged = true;
+                            }
+                        }
+                        catch
+                        {
+                            // Best-effort video mutation.
+                        }
+                    }
+
+                    foreach (var info in assets.file.GetAssetsOfType(LightClassId))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        if (!options.Textures)
+                            continue;
+
+                        try
+                        {
+                            if (TryMutateLight(
+                                manager,
+                                assets,
+                                info,
+                                options.Intensity,
+                                rng))
+                            {
+                                lights++;
+                                fileChanged = true;
+                            }
+                        }
+                        catch
+                        {
+                            // Best-effort lighting mutation.
+                        }
+                    }
+
+                    foreach (var info in assets.file.GetAssetsOfType(AssetClassID.Material))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        if (!options.Textures)
+                            continue;
+
+                        try
+                        {
+                            if (TryMutateMaterial(
+                                manager,
+                                assets,
+                                info,
+                                options.Intensity,
+                                rng))
+                            {
+                                materials++;
+                                fileChanged = true;
+                            }
+                        }
+                        catch
+                        {
+                            // Best-effort material mutation.
+                        }
+                    }
+
+                    foreach (var info in assets.file.GetAssetsOfType(AssetClassID.AudioClip))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        if (!options.Audio)
+                            continue;
+
+                        try
+                        {
+                            var baseField = manager.GetBaseField(assets, info);
+                            var audioData = baseField["m_AudioData"];
+
+                            if (!audioData.IsDummy
+                                && audioData.TemplateField.ValueType == AssetValueType.ByteArray)
+                            {
+                                var bytes = audioData.AsByteArray;
+                                if (bytes.Length > 32
+                                    && MutateEncodedRegion(
+                                        bytes,
+                                        0,
+                                        bytes.Length,
+                                        options.Intensity,
+                                        rng,
+                                        preservePrefix: 32))
+                                {
+                                    audioData.AsByteArray = bytes;
+                                    info.SetNewData(baseField);
+                                    audio++;
+                                    fileChanged = true;
+                                    continue;
+                                }
+                            }
+
+                            if (TryMutateExternalAudio(
+                                bundle.file,
+                                baseField,
+                                options.Intensity,
+                                rng))
+                            {
+                                audio++;
+                                fileChanged = true;
+                            }
+                        }
+                        catch
+                        {
+                            // A single AudioClip must never abort the bundle.
+                        }
+                    }
+
+                    if (fileChanged)
+                    {
+                        // Only replace serialized nodes we actually changed.
+                        dirInfo.SetNewData(assets.file);
                     }
                 }
                 catch
                 {
-                    // A single AudioClip must never abort the entire bundle.
+                    // Keep one malformed/unsupported node from aborting the
+                    // whole bundle.
                 }
             }
 
-            dirInfo.SetNewData(assets.file);
+            var anyBundleChanges =
+                textures > 0
+                || audio > 0
+                || materials > 0
+                || textAssets > 0
+                || meshes > 0
+                || videos > 0
+                || lights > 0;
+
+            if (!anyBundleChanges)
+                return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
+
+            await Task.Run(() =>
+            {
+                using var writer = new AssetsFileWriter(outputPath);
+                bundle.file.Write(writer);
+            }, cancellationToken);
+
+            return new MutationResult(
+                true,
+                outputPath,
+                textures,
+                audio,
+                materials,
+                textAssets,
+                meshes,
+                videos,
+                lights);
         }
-
-        var anyBundleChanges =
-            textures > 0
-            || audio > 0
-            || materials > 0
-            || textAssets > 0
-            || meshes > 0
-            || videos > 0
-            || lights > 0;
-        if (!anyBundleChanges)
-            return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
-
-        await Task.Run(() =>
+        finally
         {
-            using var writer = new AssetsFileWriter(outputPath);
-            bundle.file.Write(writer);
-        }, cancellationToken);
+            foreach (var tempPath in tempFiles)
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch
+                {
+                    // best effort cleanup
+                }
+            }
+        }
+    }
 
-        return new MutationResult(
-            true,
-            outputPath,
-            textures,
-            audio,
-            materials,
-            textAssets,
-            meshes,
-            videos,
-            lights);
+    private static bool HasVisualOrAudioAssets(AssetsFileInstance assets)
+    {
+        return assets.file.GetAssetsOfType(AssetClassID.Texture2D).Count > 0
+            || assets.file.GetAssetsOfType(AssetClassID.Material).Count > 0
+            || assets.file.GetAssetsOfType(LightClassId).Count > 0
+            || assets.file.GetAssetsOfType(VideoClipClassId).Count > 0
+            || assets.file.GetAssetsOfType(AssetClassID.AudioClip).Count > 0;
     }
 
     private static bool TryMutateTexture(
@@ -893,6 +977,9 @@ public static class UnityMutationEngine
             return false;
 
         var normalized = sourcePath.Replace('\\', '/');
+        if (normalized.StartsWith("archive:/", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[9..];
+
         var name = Path.GetFileName(normalized);
         if (string.IsNullOrWhiteSpace(name))
             return false;
@@ -921,7 +1008,7 @@ public static class UnityMutationEngine
 
         if (!MutateTextureEncodedData(
             bytes,
-            (TextureFormat)TextureFormat.RGBA32,
+            TextureFormat.RGBA32,
             intensity,
             rng,
             startOffset: (int)offset,
