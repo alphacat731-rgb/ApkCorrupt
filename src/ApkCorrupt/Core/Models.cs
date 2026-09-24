@@ -14,7 +14,9 @@ public sealed record CorruptionProgress(
     int FilesChanged,
     int MaterialsChanged = 0,
     int TextAssetsChanged = 0,
-    int MeshesChanged = 0);
+    int MeshesChanged = 0,
+    int VideosChanged = 0,
+    int LightsChanged = 0);
 
 public sealed record CorruptionResult(
     string OutputPath,
