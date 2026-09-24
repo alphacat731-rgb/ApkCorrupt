@@ -637,46 +637,43 @@ public static class UnityMutationEngine
 
                 try
                 {
-                    // First use the native bundle loader.
-                    assets = manager.LoadAssetsFileFromBundle(bundle, i, true);
+                    // The supplied decompiler archive proves that this APK's
+                    // UnityFS bundle contains 22 serialized .assets/level nodes
+                    // with hundreds of Texture2D, Material, Mesh and Light
+                    // objects. Parse each serialized node as a normal Assets file
+                    // instead of depending on the bundle-preview loader, which
+                    // was returning zero visual objects on-device.
+                    bundle.GetFileRange(i, out var fileOffset, out var fileLength);
 
-                    // Fallback: extract the decompressed directory node and parse
-                    // it as a normal .assets file. This specifically covers the
-                    // UnityFS 2021.1 LZ4HC layout used by the supplied APK.
-                    if (assets is null || !HasVisualOrAudioAssets(assets))
+                    if (fileLength <= 0 || fileLength > int.MaxValue)
+                        continue;
+
+                    tempPath = Path.Combine(
+                        Path.GetTempPath(),
+                        $"apkcorrupt-{Guid.NewGuid():N}-{Path.GetFileName(dirInfo.Name)}");
+
+                    bundle.DataReader.Position = fileOffset;
+                    await using (var temp = File.Create(tempPath))
                     {
-                        bundle.GetFileRange(i, out var fileOffset, out var fileLength);
+                        var remaining = fileLength;
+                        var buffer = new byte[1024 * 1024];
 
-                        if (fileLength <= 0 || fileLength > int.MaxValue)
-                            continue;
-
-                        tempPath = Path.Combine(
-                            Path.GetTempPath(),
-                            $"apkcorrupt-{Guid.NewGuid():N}-{Path.GetFileName(dirInfo.Name)}");
-
-                        bundle.DataReader.Position = fileOffset;
-                        await using (var temp = File.Create(tempPath))
+                        while (remaining > 0)
                         {
-                            var remaining = fileLength;
-                            var buffer = new byte[1024 * 1024];
+                            cancellationToken.ThrowIfCancellationRequested();
 
-                            while (remaining > 0)
-                            {
-                                cancellationToken.ThrowIfCancellationRequested();
+                            var take = (int)Math.Min(buffer.Length, remaining);
+                            var chunk = bundle.DataReader.ReadBytes(take);
+                            if (chunk.Length != take)
+                                throw new EndOfStreamException();
 
-                                var take = (int)Math.Min(buffer.Length, remaining);
-                                var chunk = bundle.DataReader.ReadBytes(take);
-                                if (chunk.Length != take)
-                                    throw new EndOfStreamException();
-
-                                await temp.WriteAsync(chunk, cancellationToken);
-                                remaining -= chunk.Length;
-                            }
+                            await temp.WriteAsync(chunk, cancellationToken);
+                            remaining -= chunk.Length;
                         }
-
-                        tempFiles.Add(tempPath);
-                        assets = manager.LoadAssetsFile(tempPath, false);
                     }
+
+                    tempFiles.Add(tempPath);
+                    assets = manager.LoadAssetsFile(tempPath, false);
 
                     if (assets is null)
                         continue;
@@ -894,15 +891,6 @@ public static class UnityMutationEngine
                 }
             }
         }
-    }
-
-    private static bool HasVisualOrAudioAssets(AssetsFileInstance assets)
-    {
-        return assets.file.GetAssetsOfType(AssetClassID.Texture2D).Count > 0
-            || assets.file.GetAssetsOfType(AssetClassID.Material).Count > 0
-            || assets.file.GetAssetsOfType(LightClassId).Count > 0
-            || assets.file.GetAssetsOfType(VideoClipClassId).Count > 0
-            || assets.file.GetAssetsOfType(AssetClassID.AudioClip).Count > 0;
     }
 
     private static bool TryMutateTexture(
