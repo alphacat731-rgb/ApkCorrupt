@@ -244,7 +244,7 @@ public sealed class MainActivity : Activity
             TopMargin = Dp(10)
         });
 
-        _stats = Text("Tex 0 · Mat 0 · Text 0 · Mesh 0 · Audio 0", 12, "#A8A1B6");
+        _stats = Text("Audio 0 · Tex 0 · Mat 0 · Light 0 · Video 0 · Icon 0", 12, "#A8A1B6");
         card.AddView(_stats);
 
         return card;
