@@ -132,8 +132,7 @@ public static class UnityMutationEngine
                 texture.SetPictureData(
                     encoded,
                     texture.m_Width,
-                    texture.m_Height,
-                    TextureFormat.RGBA32);
+                    texture.m_Height);
 
                 texture.WriteTo(baseField);
                 info.SetNewData(baseField);
