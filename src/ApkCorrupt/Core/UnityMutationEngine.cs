@@ -977,13 +977,13 @@ public static class UnityMutationEngine
             return false;
 
         var resourceInfo = bundle.BlockAndDirInfo.DirectoryInfos[resourceIndex];
-        bundle.file.GetFileRange(resourceIndex, out var fileOffset, out var fileLength);
+        bundle.GetFileRange(resourceIndex, out var fileOffset, out var fileLength);
 
         if (fileLength <= 0 || fileLength > int.MaxValue)
             return false;
 
-        bundle.file.DataReader.Position = fileOffset;
-        var bytes = bundle.file.DataReader.ReadBytes((int)fileLength);
+        bundle.DataReader.Position = fileOffset;
+        var bytes = bundle.DataReader.ReadBytes((int)fileLength);
 
         if (offset >= (ulong)bytes.Length)
             return false;
@@ -1221,13 +1221,13 @@ public static class UnityMutationEngine
             return false;
 
         var resourceInfo = bundle.BlockAndDirInfo.DirectoryInfos[resourceIndex];
-        bundle.file.GetFileRange(resourceIndex, out var fileOffset, out var fileLength);
+        bundle.GetFileRange(resourceIndex, out var fileOffset, out var fileLength);
 
         if (fileLength <= 0 || fileLength > int.MaxValue)
             return false;
 
-        bundle.file.DataReader.Position = fileOffset;
-        var bytes = bundle.file.DataReader.ReadBytes((int)fileLength);
+        bundle.DataReader.Position = fileOffset;
+        var bytes = bundle.DataReader.ReadBytes((int)fileLength);
 
         if (offset >= (ulong)bytes.Length)
             return false;
@@ -1740,13 +1740,13 @@ public static class UnityMutationEngine
             return false;
 
         var resourceInfo = bundle.BlockAndDirInfo.DirectoryInfos[resourceIndex];
-        bundle.file.GetFileRange(resourceIndex, out var fileOffset, out var fileLength);
+        bundle.GetFileRange(resourceIndex, out var fileOffset, out var fileLength);
 
         if (fileLength <= 0 || fileLength > int.MaxValue)
             return false;
 
-        bundle.file.DataReader.Position = fileOffset;
-        var bytes = bundle.file.DataReader.ReadBytes((int)fileLength);
+        bundle.DataReader.Position = fileOffset;
+        var bytes = bundle.DataReader.ReadBytes((int)fileLength);
 
         if (offset >= (ulong)bytes.Length)
             return false;
