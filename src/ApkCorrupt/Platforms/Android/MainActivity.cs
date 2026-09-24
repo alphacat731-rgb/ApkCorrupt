@@ -171,7 +171,7 @@ public sealed class MainActivity : Activity
         };
         card.AddView(_intensity, new LinearLayout.LayoutParams(-1, -2));
 
-        var hint = Text("Higher intensity hits more assets and makes each mutation more aggressive.", 11, "#7F778C");
+        var hint = Text("100% covers every audio bank plus every parsed texture, material, light and video; intensity controls how crunchy they get.", 11, "#7F778C");
         card.AddView(hint, new LinearLayout.LayoutParams(-1, -2)
         {
             BottomMargin = Dp(8)
@@ -192,9 +192,9 @@ public sealed class MainActivity : Activity
             BottomMargin = Dp(10)
         });
 
-        _textures = SwitchControl("Texture surgery", true);
-        _audio = SwitchControl("Audio mangling", true);
-        _loose = SwitchControl("Raw audio fallback", true);
+        _textures = SwitchControl("Visual corruption (textures / materials / lights / video)", true);
+        _audio = SwitchControl("Audio crunch (all FSB5 samples)", true);
+        _loose = SwitchControl("Loose media fallback (including MP4)", true);
 
         card.AddView(_textures);
         card.AddView(_audio);
@@ -393,7 +393,7 @@ public sealed class MainActivity : Activity
                 RunOnUiThread(() =>
                 {
                     _status.Text = p.Message;
-                    _stats.Text = $"Tex {p.TexturesChanged} · Mat {p.MaterialsChanged} · Text {p.TextAssetsChanged} · Mesh {p.MeshesChanged} · Audio {p.AudioChanged}";
+                    _stats.Text = $"Audio {p.AudioChanged} · Tex {p.TexturesChanged} · Mat {p.MaterialsChanged} · Light {p.LightsChanged} · Video {p.VideosChanged} · Icon {p.IconsChanged}";
                 });
             });
 
@@ -405,7 +405,7 @@ public sealed class MainActivity : Activity
 
             _lastOutputPath = result.OutputPath;
             _status.Text = $"Done. {SystemPath.GetFileName(result.OutputPath)}";
-            _stats.Text = $"Tex {result.TexturesChanged} · Mat {result.MaterialsChanged} · Text {result.TextAssetsChanged} · Mesh {result.MeshesChanged} · Audio {result.AudioChanged} · Files {result.FilesChanged}";
+            _stats.Text = $"Audio {result.AudioChanged} · Tex {result.TexturesChanged} · Mat {result.MaterialsChanged} · Light {result.LightsChanged} · Video {result.VideosChanged} · Icon {result.IconsChanged} · Files {result.FilesChanged}";
             _openLast.Visibility = ViewStates.Visible;
 
             new AlertDialog.Builder(this)
