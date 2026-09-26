@@ -244,7 +244,7 @@ public sealed class MainActivity : Activity
             TopMargin = Dp(10)
         });
 
-        _stats = Text("Audio 0 · Tex 0 · Mat 0 · Light 0 · Video 0 · Icon 0", 12, "#A8A1B6");
+        _stats = Text("Audio 0 · Sources 0 · Tex 0 · Mat 0 · Light 0 · Video 0 · Icon 0", 12, "#A8A1B6");
         card.AddView(_stats);
 
         return card;
@@ -393,7 +393,7 @@ public sealed class MainActivity : Activity
                 RunOnUiThread(() =>
                 {
                     _status.Text = p.Message;
-                    _stats.Text = $"Audio {p.AudioChanged} · Tex {p.TexturesChanged} · Mat {p.MaterialsChanged} · Light {p.LightsChanged} · Video {p.VideosChanged} · Icon {p.IconsChanged}";
+                    _stats.Text = $"Audio {p.AudioChanged} · Sources {p.AudioSourcesChanged} · Tex {p.TexturesChanged} · Mat {p.MaterialsChanged} · Light {p.LightsChanged} · Video {p.VideosChanged} · Icon {p.IconsChanged}";
                 });
             });
 
@@ -405,7 +405,7 @@ public sealed class MainActivity : Activity
 
             _lastOutputPath = result.OutputPath;
             _status.Text = $"Done. {SystemPath.GetFileName(result.OutputPath)}";
-            _stats.Text = $"Audio {result.AudioChanged} · Tex {result.TexturesChanged} · Mat {result.MaterialsChanged} · Light {result.LightsChanged} · Video {result.VideosChanged} · Icon {result.IconsChanged} · Files {result.FilesChanged}";
+            _stats.Text = $"Audio {result.AudioChanged} · Sources {result.AudioSourcesChanged} · Tex {result.TexturesChanged} · Mat {result.MaterialsChanged} · Light {result.LightsChanged} · Video {result.VideosChanged} · Icon {result.IconsChanged} · Files {result.FilesChanged}";
             _openLast.Visibility = ViewStates.Visible;
 
             new AlertDialog.Builder(this)
