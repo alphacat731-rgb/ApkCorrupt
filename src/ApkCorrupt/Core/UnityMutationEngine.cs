@@ -9,6 +9,7 @@ public static class UnityMutationEngine
     private const uint Fsb5Vorbis = 15;
     private const AssetClassID VideoClipClassId = (AssetClassID)329;
     private const AssetClassID LightClassId = (AssetClassID)108;
+    private const AssetClassID AudioSourceClassId = (AssetClassID)82;
 
     public sealed record MutationResult(
         bool Changed,
@@ -19,7 +20,8 @@ public static class UnityMutationEngine
         int TextAssetsChanged,
         int MeshesChanged,
         int VideosChanged = 0,
-        int LightsChanged = 0);
+        int LightsChanged = 0,
+        int AudioSourcesChanged = 0);
 
     public static async Task<MutationResult> TryMutateAsync(
         string inputPath,
@@ -340,9 +342,8 @@ public static class UnityMutationEngine
             if (packetEnd > end)
                 break;
 
-            // FSB5 Vorbis stores a one-byte packet flag followed by the Vorbis
-            // payload. Keep packet framing intact and never touch the first
-            // three codec-header packets.
+            // Keep FSB framing and the codec setup packets intact. Everything
+            // after the first three Vorbis header packets is fair game.
             var payloadStart = pos + 3;
             if (packetIndex >= 3 && payloadStart < packetEnd)
                 ranges.Add((payloadStart, packetEnd));
@@ -357,68 +358,115 @@ public static class UnityMutationEngine
         var level = Math.Clamp(intensity, 1, 100) / 100.0;
         var totalMutable = ranges.Sum(r => (long)r.End - r.Start);
 
-        // This is intentionally not a codec re-encode: FSB5 keeps Vorbis setup
-        // identification in VORBISDATA metadata. Altering the setup/CRC would
-        // risk making the sample unplayable. Instead we apply lossy-looking
-        // packet damage while preserving the FSB packet boundaries.
-        var fraction = 0.006 + (0.026 * level);
-        var touches = (int)Math.Clamp(totalMutable * fraction, 12, 180000);
+        // Heavy "deep-fry": corrupt a large portion of every audio sample while
+        // preserving packet lengths and Vorbis headers. At 100% roughly 35-40%
+        // of payload bytes are transformed, with additional smear/crackle bursts.
+        var fraction = intensity >= 95
+            ? 0.28 + (0.12 * level)
+            : intensity >= 80
+                ? 0.10 + (0.20 * level)
+                : 0.015 + (0.12 * level);
+
+        var touches = (int)Math.Clamp(
+            totalMutable * fraction,
+            24,
+            1200000);
 
         for (var i = 0; i < touches; i++)
         {
             var range = ranges[rng.Next(ranges.Count)];
             var index = rng.Next(range.Start, range.End);
 
-            switch (rng.Next(5))
+            switch (rng.Next(7))
             {
                 case 0:
-                    // Drop lower bits: a crude low-fidelity / crunchy effect.
-                    bytes[index] &= intensity >= 80 ? (byte)0xC0 : (byte)0xE0;
+                    // Aggressive bit-crushing.
+                    bytes[index] &= intensity >= 90 ? (byte)0xF0 : (byte)0xE0;
                     break;
 
                 case 1:
-                    // Flip a sparse bit for codec grit.
-                    bytes[index] ^= (byte)(1 << rng.Next(8));
+                    // Quantize the high bits, leaving a repeatable gritty floor.
+                    bytes[index] = (byte)((bytes[index] & 0xF8) | (rng.Next(4) & 0x07));
                     break;
 
                 case 2:
-                    bytes[index] = (byte)rng.Next(0, 256);
+                    bytes[index] ^= (byte)rng.Next(1, 256);
                     break;
 
                 case 3:
-                    bytes[index] = unchecked((byte)(bytes[index] + rng.Next(16, 96)));
+                    bytes[index] = (byte)rng.Next(0, 256);
+                    break;
+
+                case 4:
+                    bytes[index] = unchecked((byte)(bytes[index] + rng.Next(24, 192)));
+                    break;
+
+                case 5:
+                    bytes[index] = unchecked((byte)(bytes[index] - rng.Next(24, 192)));
                     break;
 
                 default:
-                    bytes[index] = unchecked((byte)(bytes[index] - rng.Next(16, 96)));
+                    // Bias bytes upward to push the compressed signal toward
+                    // harsher, denser noise. This is not a true PCM gain stage,
+                    // but it makes the damaged decode substantially more hostile.
+                    bytes[index] |= (byte)rng.Next(0x40, 0x100);
                     break;
             }
         }
 
-        // Short bursts create audible crackle without rewriting packet lengths.
         if (level >= 0.35)
         {
-            var burstCount = Math.Clamp(ranges.Count / 8, 1, 96);
+            var burstCount = Math.Clamp(
+                intensity >= 90 ? ranges.Count / 2 : ranges.Count / 8,
+                1,
+                256);
 
             for (var i = 0; i < burstCount; i++)
             {
                 var range = ranges[rng.Next(ranges.Count)];
-                var maxLength = Math.Min(96, Math.Max(6, range.End - range.Start));
+                var available = range.End - range.Start;
+                if (available < 8)
+                    continue;
+
+                var maxLength = Math.Min(
+                    intensity >= 90 ? 384 : 96,
+                    available);
+
                 var length = Math.Min(
                     maxLength,
-                    6 + rng.Next(Math.Max(1, maxLength - 5)));
+                    8 + rng.Next(Math.Max(1, maxLength - 7)));
 
                 var burstStart = rng.Next(
                     range.Start,
                     range.End - length + 1);
 
+                // Repeat a short local pattern to create the "fried" tearing
+                // effect without crossing an FSB packet boundary.
+                var source = Math.Min(
+                    range.End - 1,
+                    burstStart + rng.Next(Math.Min(8, Math.Max(1, length))));
+
                 for (var j = 0; j < length; j++)
                 {
-                    bytes[burstStart + j] &= intensity >= 85 ? (byte)0x7F : (byte)0xBF;
+                    var sourceIndex = source + (j % Math.Min(8, length));
+                    if (sourceIndex >= range.End)
+                        sourceIndex = burstStart + (j % Math.Min(8, length));
+
+                    var value = bytes[sourceIndex];
+                    value &= intensity >= 90 ? (byte)0x3F : (byte)0x7F;
+
+                    if ((j & 3) == 0)
+                        value ^= (byte)rng.Next(0x10, 0x80);
+
+                    bytes[burstStart + j] = value;
                 }
             }
         }
 
+        // The Android mixer ultimately clamps AudioSource.volume to its normal
+        // range, so true >1 PCM gain is not produced here. The source-side pass
+        // below boosts every AudioSource to its maximum and removes distance
+        // attenuation where possible.
         return touches > 0;
     }
 
@@ -439,6 +487,7 @@ public static class UnityMutationEngine
         var meshes = 0;
         var videos = 0;
         var lights = 0;
+        var audioSources = 0;
 
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.Texture2D))
         {
@@ -543,6 +592,31 @@ public static class UnityMutationEngine
             }
         }
 
+        foreach (var info in instance.file.GetAssetsOfType(AudioSourceClassId))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!options.Audio)
+                continue;
+
+            try
+            {
+                if (TryMutateAudioSource(
+                    manager,
+                    instance,
+                    info,
+                    options.Intensity,
+                    rng))
+                {
+                    audioSources++;
+                }
+            }
+            catch
+            {
+                // A single source must never abort the file.
+            }
+        }
+
         foreach (var info in instance.file.GetAssetsOfType(AssetClassID.AudioClip))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -582,7 +656,7 @@ public static class UnityMutationEngine
             }
         }
 
-        if (textures == 0 && audio == 0 && materials == 0 && textAssets == 0 && meshes == 0 && videos == 0 && lights == 0)
+        if (textures == 0 && audio == 0 && materials == 0 && textAssets == 0 && meshes == 0 && videos == 0 && lights == 0 && audioSources == 0)
             return new MutationResult(false, inputPath, 0, 0, 0, 0, 0);
 
         await Task.Run(() =>
@@ -600,7 +674,8 @@ public static class UnityMutationEngine
             textAssets,
             meshes,
             videos,
-            lights);
+            lights,
+            audioSources);
     }
 
     private static async Task<MutationResult> MutateBundleAsync(
@@ -620,6 +695,7 @@ public static class UnityMutationEngine
         var meshes = 0;
         var videos = 0;
         var lights = 0;
+        var audioSources = 0;
         var tempFiles = new List<string>();
 
         try
@@ -786,7 +862,33 @@ public static class UnityMutationEngine
                         }
                     }
 
-                    foreach (var info in assets.file.GetAssetsOfType(AssetClassID.AudioClip))
+                    foreach (var info in assets.file.GetAssetsOfType(AudioSourceClassId))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!options.Audio)
+                    continue;
+
+                try
+                {
+                    if (TryMutateAudioSource(
+                        manager,
+                        assets,
+                        info,
+                        options.Intensity,
+                        rng))
+                    {
+                        audioSources++;
+                        fileChanged = true;
+                    }
+                }
+                catch
+                {
+                    // A single source must never abort the bundle.
+                }
+            }
+
+            foreach (var info in assets.file.GetAssetsOfType(AssetClassID.AudioClip))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1160,6 +1262,87 @@ public static class UnityMutationEngine
 
             _ => 0
         };
+    }
+
+    private static bool TryMutateAudioSource(
+        AssetsManager manager,
+        AssetsFileInstance assets,
+        AssetFileInfo info,
+        int intensity,
+        Random rng)
+    {
+        var baseField = manager.GetBaseField(assets, info);
+        var changed = false;
+        var level = Math.Clamp(intensity, 1, 100) / 100f;
+
+        var volume = baseField["m_Volume"];
+        if (!volume.IsDummy
+            && volume.TemplateField.ValueType == AssetValueType.Float)
+        {
+            // Unity stores AudioSource.volume in a 0..1 range. Max it out
+            // rather than writing an invalid >1 value that Unity would clamp.
+            if (volume.AsFloat < 1f)
+            {
+                volume.AsFloat = 1f;
+                changed = true;
+            }
+        }
+
+        var spatialBlend = baseField["m_SpatialBlend"];
+        if (!spatialBlend.IsDummy
+            && spatialBlend.TemplateField.ValueType == AssetValueType.Float
+            && intensity >= 75)
+        {
+            // More 2D signal means less distance attenuation on mobile speakers.
+            spatialBlend.AsFloat = Math.Clamp(
+                spatialBlend.AsFloat * (1f - (0.9f * level)),
+                0f,
+                1f);
+            changed = true;
+        }
+
+        var minDistance = baseField["m_MinDistance"];
+        if (!minDistance.IsDummy
+            && minDistance.TemplateField.ValueType == AssetValueType.Float
+            && intensity >= 60)
+        {
+            var current = minDistance.AsFloat;
+            if (!float.IsNaN(current) && !float.IsInfinity(current))
+            {
+                minDistance.AsFloat = Math.Max(
+                    1f,
+                    current * (1f + (4f * level)));
+                changed = true;
+            }
+        }
+
+        var pitch = baseField["m_Pitch"];
+        if (!pitch.IsDummy
+            && pitch.TemplateField.ValueType == AssetValueType.Float
+            && intensity >= 70)
+        {
+            pitch.AsFloat = 0.55f
+                + ((float)rng.NextDouble() * (0.95f + (0.85f * level)));
+            changed = true;
+        }
+
+        var doppler = baseField["m_DopplerLevel"];
+        if (!doppler.IsDummy
+            && doppler.TemplateField.ValueType == AssetValueType.Float
+            && intensity >= 80)
+        {
+            doppler.AsFloat = Math.Clamp(
+                doppler.AsFloat * (1f + (2.5f * level)),
+                0f,
+                5f);
+            changed = true;
+        }
+
+        if (!changed)
+            return false;
+
+        info.SetNewData(baseField);
+        return true;
     }
 
     private static bool TryMutateVideoClip(
