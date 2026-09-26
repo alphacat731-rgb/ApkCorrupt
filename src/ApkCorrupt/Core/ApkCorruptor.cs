@@ -83,6 +83,7 @@ public static class ApkCorruptor
         var videoCount = 0;
         var lightCount = 0;
         var iconCount = 0;
+        var audioSourceCount = 0;
         var filesChanged = 0;
         var candidateIndex = 0;
 
@@ -231,7 +232,8 @@ public static class ApkCorruptor
                         meshCount,
                         videoCount,
                         lightCount,
-                        iconCount));
+                        iconCount,
+                        audioSourceCount));
                 }
             }
 
@@ -263,7 +265,8 @@ public static class ApkCorruptor
                 meshCount,
                 videoCount,
                 lightCount,
-                iconCount);
+                iconCount,
+                audioSourceCount);
         }
         finally
         {
